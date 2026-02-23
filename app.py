@@ -5,43 +5,21 @@ import plotly.graph_objects as go
 from etl.fetcher import DataFetcher
 import os
 import time
+import pytz
+from datetime import datetime
 
-# def get_market_status(market_code):
-    # """Returns a status string and icon based on exchange hours."""
-    # # Define timezones for your markets
-    # tz_map = {
-    #     "US": "US/Eastern",
-    #     "ES": "Europe/Madrid",
-    #     "UK": "Europe/London"
-    # }
-    
-    # tz = pytz.timezone(tz_map.get(market_code, "UTC"))
-    # now = datetime.now(tz)
-    
-    # # Standard Market Hours: 09:00 - 17:30
-    # is_weekday = now.weekday() < 5
-    # is_hours = 9 <= now.hour < 17 or (now.hour == 17 and now.minute <= 30)
-    
-    # if is_weekday and is_hours:
-    #     return "🟢 Open", "Normal Trading"
-    # elif is_weekday:
-    #     return "🔴 Closed", "After Hours"
-    # else:
-    #     return "🔴 Closed", "Weekend"
+# --- SETTINGS & CONFIG ---
+st.set_page_config(page_title="Trade AI: War Room", layout="wide")
 
-# # --- UI COMPONENT: TOP STATUS BAR ---
-# cols = st.columns(3)
-# with cols[0]:
-#     status, msg = get_market_status("US")
-#     st.metric("Wall Street (NYC)", status, msg)
-# with cols[1]:
-#     status, msg = get_market_status("UK")
-#     st.metric("London (LSE)", status, msg)
-# with cols[2]:
-#     status, msg = get_market_status("ES")
-#     st.metric("Madrid (BME)", status, msg)
+WATCHLIST = [
+    {"Ticker": "CBRE",   "Market": "US"},
+    {"Ticker": "SAN.MC", "Market": "ES"},
+    {"Ticker": "RTO.L",  "Market": "UK"},
+    {"Ticker": "CSCO",   "Market": "US"},
+    {"Ticker": "GLEN.L", "Market": "UK"},
+]
 
-# --- SECURITY: SIMPLE LOGIN ---
+# --- SECURITY ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.title("🦅 Dip-Hunter Access")
@@ -55,58 +33,7 @@ def check_password():
         return False
     return True
 
-if not check_password():
-    st.stop()
-
-# --- CACHED DATA FETCHING ---
-@st.cache_data(ttl=900)  # Cache results for 15 minutes (900 seconds)
-def get_market_data(watchlist):
-    """Fetches and processes data once, then stores it in memory."""
-    dashboard_data = []
-    all_ticker_dfs = {}
-    
-    for item in watchlist:
-        ticker = item["Ticker"]
-        fetcher = DataFetcher(ticker)
-        
-        # 1. Extraction with a small delay (1s) to respect Rate Limits
-        hist_df = fetcher.fetch_historical_data(period="1y")
-        full_data = fetcher.add_indicators(hist_df)
-        
-        if full_data.empty:
-            continue
-            
-        latest = full_data.iloc[-1]
-        all_ticker_dfs[ticker] = full_data
-        
-        # Determine ML Prediction (Moved inside cache to avoid re-calculation)
-        # Note: ml_model is loaded globally below
-        features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
-        buy_prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
-        
-        current_price = latest['Close']
-        stop_buffer = current_price * (latest['Volatility'] * 2)
-        
-        dashboard_data.append({
-            "Ticker": ticker,
-            "Price": round(current_price, 2),
-            "RSI": round(latest['RSI'], 1),
-            "AI Conviction": buy_prob,
-            "Stop Loss": round(current_price - stop_buffer, 2),
-            "Target": round(current_price + (stop_buffer * 2), 2),
-            "Vol": round(latest['Volatility'], 4)
-        })
-    return dashboard_data, all_ticker_dfs
-
-# --- CONFIGURATION & MODELS ---
-WATCHLIST = [
-    {"Ticker": "CBRE",   "Market": "US"},
-    {"Ticker": "SAN.MC", "Market": "ES"},
-    {"Ticker": "RTO.L",  "Market": "UK"},
-    {"Ticker": "CSCO",   "Market": "US"},
-    {"Ticker": "GLEN.L", "Market": "UK"},
-]
-
+# --- SHARED UTILITIES ---
 @st.cache_resource
 def load_assets():
     try:
@@ -116,80 +43,104 @@ def load_assets():
 
 ml_model = load_assets()
 
-# --- VISUALIZATION FUNCTIONS ---
+def get_market_status(market_code):
+    tz_map = {"US": "US/Eastern", "ES": "Europe/Madrid", "UK": "Europe/London"}
+    tz = pytz.timezone(tz_map.get(market_code, "UTC"))
+    now = datetime.now(tz)
+    is_weekday = now.weekday() < 5
+    is_hours = 9 <= now.hour < 17 or (now.hour == 17 and now.minute <= 30)
+    return ("🟢 Open", "Trading") if (is_weekday and is_hours) else ("🔴 Closed", "Market Idle")
+
 def create_price_chart(df, ticker, buy_prob):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Price', line=dict(color='#00d4ff', width=2)))
     fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='50 MA', line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash')))
     fig.update_layout(
         title=f"{ticker} Analysis (AI Conviction: {buy_prob:.1%})",
-        template="plotly_dark",
-        xaxis_rangeslider_visible=False,
-        height=400,
+        template="plotly_dark", xaxis_rangeslider_visible=False, height=400,
         margin=dict(l=20, r=20, t=50, b=20)
     )
     return fig
 
-# --- APP LAYOUT ---
-st.set_page_config(page_title="Trade AI: War Room", layout="wide")
-st.title("🦅 Trade AI: Dip-Hunter Pro")
+@st.cache_data(ttl=900)
+def fetch_processed_data(ticker):
+    fetcher = DataFetcher(ticker)
+    hist_df = fetcher.fetch_historical_data(period="1y")
+    return fetcher.add_indicators(hist_df)
 
-# Sidebar Logic
-if st.sidebar.button('🔄 Clear Cache & Refresh'):
-    st.cache_data.clear()
-    st.rerun()
-
-# --- EXECUTION ---
-with st.spinner('Synchronizing Global Markets...'):
-    dashboard_data, all_ticker_dfs = get_market_data(WATCHLIST)
-
-if not dashboard_data:
-    st.error("No data fetched. Yahoo Finance might be blocking the request. Try again in 10 minutes.")
-    st.stop()
-
-# --- UI COMPONENT: TOP TABLE ---
-st.subheader("📡 Live Signals")
-df_display = pd.DataFrame(dashboard_data)
-
-def color_conviction(val):
-    if val > 0.7: return 'background-color: #2ecc71'
-    elif val < 0.3: return 'background-color: #e74c3c'
-    return ''
-
-st.dataframe(
-    df_display.style.format({"AI Conviction": "{:.1%}"}).applymap(color_conviction, subset=['AI Conviction']),
-    use_container_width=True,
-    hide_index=True
-)
-
-# --- UI COMPONENT: DEEP DIVE VISUALS ---
-st.markdown("---")
-tabs = st.tabs([item["Ticker"] for item in WATCHLIST])
-
-for i, tab in enumerate(tabs):
-    ticker = WATCHLIST[i]["Ticker"]
-    # Safety check if ticker failed to fetch
-    if ticker not in all_ticker_dfs:
-        continue
-        
-    row = next(item for item in dashboard_data if item["Ticker"] == ticker)
+# --- PAGE 1: WAR ROOM ---
+def show_war_room():
+    st.title("🦅 Trade AI: War Room")
     
-    with tab:
-        col_text, col_chart = st.columns([1, 2])
-        with col_text:
-            st.metric("AI Conviction", f"{row['AI Conviction']:.1%}")
-            st.write(f"**RSI:** {row['RSI']}")
-            st.write(f"**Stop/Target:** {row['Stop Loss']} / {row['Target']}")
-            
-            if row['AI Conviction'] > 0.7:
-                st.success("Bullish signal: Deep dip detected.")
-            elif row['AI Conviction'] < 0.3:
-                st.error("Bearish signal: Momentum failing.")
+    # Market Status Bar
+    m_cols = st.columns(3)
+    for i, (m, label) in enumerate([("US", "Wall Street"), ("UK", "London"), ("ES", "Madrid")]):
+        status, msg = get_market_status(m)
+        m_cols[i].metric(label, status, msg)
+    
+    st.markdown("---")
+
+    dashboard_data = []
+    all_ticker_dfs = {}
+
+    with st.spinner('Syncing Watchlist...'):
+        for item in WATCHLIST:
+            ticker = item["Ticker"]
+            full_data = fetch_processed_data(ticker)
+            if not full_data.empty:
+                latest = full_data.iloc[-1]
+                all_ticker_dfs[ticker] = full_data
+                features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
+                buy_prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
+                
+                dashboard_data.append({
+                    "Ticker": ticker, "Price": latest['Close'], "RSI": latest['RSI'],
+                    "AI Conviction": buy_prob, "Vol": latest['Volatility']
+                })
+
+    # Table
+    df_display = pd.DataFrame(dashboard_data)
+    st.dataframe(df_display.style.format({"Price": "{:.2f}", "AI Conviction": "{:.1%}"}), use_container_width=True, hide_index=True)
+
+    # Deep Dive Tabs
+    tabs = st.tabs([d["Ticker"] for d in dashboard_data])
+    for i, tab in enumerate(tabs):
+        ticker = dashboard_data[i]["Ticker"]
+        with tab:
+            st.plotly_chart(create_price_chart(all_ticker_dfs[ticker], ticker, dashboard_data[i]["AI Conviction"]))
+
+# --- PAGE 2: SCANNER ---
+def show_scanner():
+    st.title("🔍 AI Ticker Scanner")
+    st.write("Perform an on-demand AI audit on any global stock.")
+    
+    target = st.text_input("Enter Ticker (e.g. AAPL, TSLA, BTC-USD)", value="NVDA").upper()
+    
+    if st.button("Analyze Ticker"):
+        with st.spinner(f"Running ML Audit on {target}..."):
+            data = fetch_processed_data(target)
+            if not data.empty:
+                latest = data.iloc[-1]
+                features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
+                prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("AI Conviction", f"{prob:.1%}")
+                c2.metric("RSI", f"{latest['RSI']:.1f}")
+                c3.metric("Volatility", f"{latest['Volatility']:.4f}")
+                
+                st.plotly_chart(create_price_chart(data, target, prob))
             else:
-                st.warning("Neutral: Awaiting volume confirmation.")
+                st.error("Data fetch failed. Check the ticker symbol.")
 
-        with col_chart:
-            chart = create_price_chart(all_ticker_dfs[ticker], ticker, row['AI Conviction'])
-            st.plotly_chart(chart, use_container_width=True)
-
-st.caption("Engine: Random Forest v1.0 | Cache TTL: 15m")
+# --- NAVIGATION ---
+if check_password():
+    pg = st.navigation([
+        st.Page(show_war_room, title="War Room", icon="🦅"),
+        st.Page(show_scanner, title="AI Scanner", icon="🔍"),
+    ])
+    pg.run()
+    
+    if st.sidebar.button("🗑️ Clear Cache"):
+        st.cache_data.clear()
+        st.rerun()
