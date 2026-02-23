@@ -49,17 +49,14 @@ def check_password():
 
 # --- TRADING 212 API (BASIC AUTH) ---
 def get_t212_positions():
-    """Fetches live positions using ID:Secret pair from secrets.toml"""
-    url = "https://live.trading212.com/api/v0/equity/positions"
+    # Toggle this to True if using a Practice Account
+    IS_DEMO = False 
+    base_url = "demo.trading212.com" if IS_DEMO else "live.trading212.com"
+    url = f"https://{base_url}/api/v0/equity/positions"
     
     key_id = st.secrets.get("t212_key_id")
     secret = st.secrets.get("t212_secret")
     
-    if not key_id or not secret:
-        st.error("Missing T212 Key ID or Secret in secrets.toml")
-        return None
-
-    # Encode ID:Secret for Basic Auth
     auth_bytes = f"{key_id}:{secret}".encode("utf-8")
     encoded_auth = base64.b64encode(auth_bytes).decode("utf-8")
     
@@ -72,6 +69,9 @@ def get_t212_positions():
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             return response.json()
+        elif response.status_code == 401:
+            st.error(f"🚫 401 Unauthorized: The keys for the {'DEMO' if IS_DEMO else 'LIVE'} server were rejected. Check your API permissions in the T212 app.")
+            return None
         else:
             st.error(f"T212 Error {response.status_code}: {response.text}")
             return None
