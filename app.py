@@ -8,6 +8,7 @@ import time
 import pytz
 from datetime import datetime
 import yfinance as yf
+import requests
 
 # --- SETTINGS & CONFIG ---
 st.set_page_config(page_title="Trade AI: War Room", layout="wide")
@@ -20,21 +21,22 @@ WATCHLIST = [
     {"Ticker": "GLEN.L", "Market": "UK"},
 ]
 
-# --- TOOLTIP DEFINITIONS ---
 TOOLTIPS = {
-    "RSI": "Relative Strength Index (0-100). Below 30 is 'Oversold' (Buy opportunity), above 70 is 'Overbought' (Sell warning).",
-    "AI Conviction": "The ML model's confidence (0-100%) that the current setup matches a historical 'Buy' pattern.",
-    "Vol": "Volatility (Standard Deviation of returns). High values mean the price is swinging wildly.",
-    "MA50": "The average price over the last 50 days. Acts as a support/resistance line."
+    "RSI": "Relative Strength Index (0-100). Below 30 is 'Oversold' (Potential Buy), above 70 is 'Overbought'.",
+    "AI Conviction": "ML model confidence (0-100%) that current data matches a historical 'Buy' pattern.",
+    "Vol": "Volatility (Std Dev of returns). High values indicate large price swings.",
+    "MA50": "The 50-day Moving Average. Often used to identify short-term trends."
 }
 
-# --- SECURITY ---
+# --- SECURITY (Using st.secrets) ---
 def check_password():
+    """Checks if the password in session state matches the secret."""
     if "password_correct" not in st.session_state:
         st.title("🦅 Dip-Hunter Access")
-        st.text_input("Enter credentials", type="password", key="password_input")
+        # Use the password from secrets.toml
+        pwd_input = st.text_input("Enter credentials", type="password")
         if st.button("Login"):
-            if st.session_state["password_input"] == "trade_secret_2026":
+            if pwd_input == st.secrets["password"]:
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
@@ -53,25 +55,13 @@ def load_assets():
 ml_model = load_assets()
 
 def get_market_info(market_code):
-    """Returns status and formatted current time for the market."""
     tz_map = {"US": "US/Eastern", "ES": "Europe/Madrid", "UK": "Europe/London"}
     tz = pytz.timezone(tz_map.get(market_code, "UTC"))
     now = datetime.now(tz)
-    
     is_weekday = now.weekday() < 5
     is_hours = 9 <= now.hour < 17 or (now.hour == 17 and now.minute <= 30)
     status = "🟢 Open" if (is_weekday and is_hours) else "🔴 Closed"
     return status, now.strftime("%H:%M:%S")
-
-def create_price_chart(df, ticker, buy_prob):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Price', line=dict(color='#00d4ff', width=2)))
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='50 MA', line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash')))
-    fig.update_layout(
-        template="plotly_dark", xaxis_rangeslider_visible=False, height=400,
-        margin=dict(l=10, r=10, t=30, b=10)
-    )
-    return fig
 
 @st.cache_data(ttl=900)
 def fetch_processed_data(ticker):
@@ -79,18 +69,39 @@ def fetch_processed_data(ticker):
     hist_df = fetcher.fetch_historical_data(period="1y")
     return fetcher.add_indicators(hist_df)
 
+def create_price_chart(df, ticker, buy_prob):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Price', line=dict(color='#00d4ff', width=2)))
+    fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='50 MA', line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash')))
+    fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=400, margin=dict(l=10, r=10, t=30, b=10))
+    return fig
+
+# --- TRADING 212 INTEGRATION ---
+def get_t212_positions():
+    """Fetches live positions using the API key from st.secrets."""
+    url = "https://live.trading212.com/api/v0/equity/positions"
+    # Pulling from st.secrets
+    headers = {"Authorization": st.secrets["t212_api_key"]}
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"T212 API Error: {response.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"Connection failed: {e}")
+        return None
+
 # --- PAGE 1: WAR ROOM ---
 def show_war_room():
     st.title("🦅 Trade AI: War Room")
-    
-    # Market Status Bar with Time
     m_cols = st.columns(3)
     for i, (m, label) in enumerate([("US", "Wall Street"), ("UK", "London"), ("ES", "Madrid")]):
         status, local_time = get_market_info(m)
         m_cols[i].metric(label, status, f"Local Time: {local_time}")
     
     st.markdown("---")
-
     dashboard_data = []
     all_ticker_dfs = {}
 
@@ -103,72 +114,88 @@ def show_war_room():
                 all_ticker_dfs[ticker] = full_data
                 features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                 buy_prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
-                
-                dashboard_data.append({
-                    "Ticker": ticker, "Price": latest['Close'], "RSI": latest['RSI'],
-                    "AI Conviction": buy_prob, "Vol": latest['Volatility']
-                })
+                dashboard_data.append({"Ticker": ticker, "Price": latest['Close'], "RSI": latest['RSI'], "AI Conviction": buy_prob, "Vol": latest['Volatility']})
 
-    # Table with Tooltips in column headers
     df_display = pd.DataFrame(dashboard_data)
-    st.dataframe(
-        df_display.style.format({"Price": "{:.2f}", "AI Conviction": "{:.1%}", "RSI": "{:.1f}", "Vol": "{:.4f}"}), 
-        use_container_width=True, hide_index=True
-    )
-
-    # Deep Dive Tabs
+    st.dataframe(df_display.style.format({"Price": "{:.2f}", "AI Conviction": "{:.1%}", "RSI": "{:.1f}", "Vol": "{:.4f}"}), use_container_width=True, hide_index=True)
+    
     tabs = st.tabs([d["Ticker"] for d in dashboard_data])
     for i, tab in enumerate(tabs):
-        ticker = dashboard_data[i]["Ticker"]
-        row = dashboard_data[i]
         with tab:
+            row = dashboard_data[i]
             c1, c2 = st.columns([1, 3])
-            with c1:
-                st.metric("AI Conviction", f"{row['AI Conviction']:.1%}", help=TOOLTIPS["AI Conviction"])
-                st.metric("RSI", f"{row['RSI']:.1f}", help=TOOLTIPS["RSI"])
-                st.metric("Volatility", f"{row['Vol']:.4f}", help=TOOLTIPS["Vol"])
-            with c2:
-                st.plotly_chart(create_price_chart(all_ticker_dfs[ticker], ticker, row["AI Conviction"]))
+            c1.metric("AI Conviction", f"{row['AI Conviction']:.1%}", help=TOOLTIPS["AI Conviction"])
+            c1.metric("RSI", f"{row['RSI']:.1f}", help=TOOLTIPS["RSI"])
+            c2.plotly_chart(create_price_chart(all_ticker_dfs[row["Ticker"]], row["Ticker"], row["AI Conviction"]))
 
 # --- PAGE 2: SCANNER ---
 def show_scanner():
     st.title("🔍 AI Ticker Scanner")
-    
-    # ADVANCED SEARCH LOGIC
-    search_query = st.text_input("Enter Company Name or Ticker (e.g. 'Apple' or 'AAPL')")
-    
+    search_query = st.text_input("Search by Company Name or Ticker")
     if search_query:
-        # Resolve Ticker using yfinance search
-        search_results = yf.Search(search_query, max_results=5).quotes
-        if not search_results:
-            st.error("No results found.")
-        else:
-            # Let user pick the best match
-            options = {f"{r['symbol']} ({r.get('shortname', 'N/A')})": r['symbol'] for r in search_results}
-            selected_display = st.selectbox("Select the correct match:", list(options.keys()))
-            target = options[selected_display]
-
+        results = yf.Search(search_query, max_results=5).quotes
+        if results:
+            options = {f"{r['symbol']} ({r.get('shortname', 'N/A')})": r['symbol'] for r in results}
+            target = options[st.selectbox("Select Match:", list(options.keys()))]
             if st.button(f"Analyze {target}"):
-                with st.spinner(f"Running ML Audit on {target}..."):
-                    data = fetch_processed_data(target)
+                data = fetch_processed_data(target)
+                if not data.empty:
+                    latest = data.iloc[-1]
+                    features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
+                    prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("AI Conviction", f"{prob:.1%}", help=TOOLTIPS["AI Conviction"])
+                    c2.metric("RSI", f"{latest['RSI']:.1f}", help=TOOLTIPS["RSI"])
+                    st.plotly_chart(create_price_chart(data, target, prob))
+
+# --- PAGE 3: PORTFOLIO ---
+def show_portfolio():
+    st.title("💰 Trading 212 Live Portfolio")
+    
+    # Logic now attempts to use the secret key automatically
+    if "t212_api_key" not in st.secrets:
+        st.warning("No T212 API Key found in secrets. Please add it to .streamlit/secrets.toml")
+        return
+
+    positions = get_t212_positions()
+    if positions:
+        st.success(f"Synced {len(positions)} positions from account.")
+        portfolio_data = []
+        
+        for pos in positions:
+            # Clean ticker for yfinance (removes _US_EQ etc)
+            ticker = pos['ticker'].split('_')[0] 
+            portfolio_data.append({
+                "Ticker": ticker,
+                "Qty": pos['quantity'],
+                "Current Price": pos['currentPrice'],
+                "P&L": f"{pos['ppl']:.2f} {pos['currency']}"
+            })
+        
+        df_p = pd.DataFrame(portfolio_data)
+        st.dataframe(df_p, use_container_width=True, hide_index=True)
+
+        if st.button("Run AI Portfolio Health Check"):
+            for ticker in df_p['Ticker']:
+                with st.expander(f"Audit: {ticker}"):
+                    data = fetch_processed_data(ticker)
                     if not data.empty:
                         latest = data.iloc[-1]
                         features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                         prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
-                        
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("AI Conviction", f"{prob:.1%}", help=TOOLTIPS["AI Conviction"])
-                        c2.metric("RSI", f"{latest['RSI']:.1f}", help=TOOLTIPS["RSI"])
-                        c3.metric("Volatility", f"{latest['Volatility']:.4f}", help=TOOLTIPS["Vol"])
-                        
-                        st.plotly_chart(create_price_chart(data, target, prob))
-                    else:
-                        st.error("Data fetch failed for this ticker.")
+                        st.metric("AI Conviction", f"{prob:.1%}")
+                        if prob < 0.3: st.error("🚨 Warning: Poor Technical Alignment.")
+                        elif prob > 0.7: st.success("💎 Strong Alignment.")
 
 # --- NAVIGATION ---
 if check_password():
     pg = st.navigation([
         st.Page(show_war_room, title="War Room", icon="🦅"),
         st.Page(show_scanner, title="AI Scanner", icon="🔍"),
+        st.Page(show_portfolio, title="My Portfolio", icon="💰")
     ])
     pg.run()
+    
+    if st.sidebar.button("Refresh Cache"):
+        st.cache_data.clear()
+        st.rerun()
