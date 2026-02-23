@@ -29,17 +29,17 @@ import time
     # else:
     #     return "🔴 Closed", "Weekend"
 
-# --- UI COMPONENT: TOP STATUS BAR ---
-cols = st.columns(3)
-with cols[0]:
-    status, msg = get_market_status("US")
-    st.metric("Wall Street (NYC)", status, msg)
-with cols[1]:
-    status, msg = get_market_status("UK")
-    st.metric("London (LSE)", status, msg)
-with cols[2]:
-    status, msg = get_market_status("ES")
-    st.metric("Madrid (BME)", status, msg)
+# # --- UI COMPONENT: TOP STATUS BAR ---
+# cols = st.columns(3)
+# with cols[0]:
+#     status, msg = get_market_status("US")
+#     st.metric("Wall Street (NYC)", status, msg)
+# with cols[1]:
+#     status, msg = get_market_status("UK")
+#     st.metric("London (LSE)", status, msg)
+# with cols[2]:
+#     status, msg = get_market_status("ES")
+#     st.metric("Madrid (BME)", status, msg)
 
 # --- SECURITY: SIMPLE LOGIN ---
 def check_password():
