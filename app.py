@@ -176,36 +176,47 @@ def show_scanner():
 def show_portfolio():
     st.title("💰 My Live Portfolio")
     
-    # Verify both keys exist in secrets
-    if "t212_key_id" not in st.secrets or "t212_secret" not in st.secrets:
-        st.warning("⚠️ No T212 credentials found. Check your secrets.toml file.")
-        return
-
     positions = get_t212_positions()
+    
     if positions:
-        st.success(f"Synced {len(positions)} positions.")
+        # Debugging: Uncomment the line below if you still get errors to see the data structure
+        # st.write(positions[0]) 
+
         portfolio_list = []
         for pos in positions:
-            ticker = pos['ticker'].split('_')[0] 
+            # T212 API sometimes uses 'ticker', 'instrumentId', or 'symbol'
+            # This 'get' logic prevents the KeyError crash
+            raw_ticker = pos.get('ticker') or pos.get('instrumentId') or pos.get('instrumentCode') or "UNKNOWN"
+            
+            # Clean the ticker (e.g., "AAPL_US_EQ" -> "AAPL")
+            ticker = raw_ticker.split('_')[0] 
+            
             portfolio_list.append({
-                "Ticker": ticker, "Qty": pos['quantity'], 
-                "Price": pos['currentPrice'], "P&L": f"{pos['ppl']:.2f} {pos['currency']}"
+                "Ticker": ticker,
+                "Qty": pos.get('quantity', 0), 
+                "Price": pos.get('currentPrice', 0), 
+                # ppl = Private Profit/Loss
+                "P&L": f"{pos.get('ppl', 0):.2f}" 
             })
         
-        df_p = pd.DataFrame(portfolio_list)
-        st.table(df_p)
+        if portfolio_list:
+            df_p = pd.DataFrame(portfolio_list)
+            st.dataframe(df_p, use_container_width=True, hide_index=True)
 
-        if st.button("Run AI Health Check"):
-            for ticker in df_p['Ticker']:
-                with st.expander(f"Audit: {ticker}"):
-                    data = fetch_processed_data(ticker)
-                    if not data.empty:
-                        latest = data.iloc[-1]
-                        features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
-                        prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
-                        st.metric("AI Conviction", f"{prob:.1%}")
-                        if prob < 0.3: st.error("🚨 Exit Signal: Poor Technical Setup.")
-                        elif prob > 0.7: st.success("💎 Hold: Strong Alignment.")
+            if st.button("Run AI Health Check"):
+                for ticker in df_p['Ticker']:
+                    if ticker == "UNKNOWN": continue
+                    with st.expander(f"Audit: {ticker}"):
+                        data = fetch_processed_data(ticker)
+                        if not data.empty:
+                            latest = data.iloc[-1]
+                            features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
+                            prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
+                            st.metric("AI Conviction", f"{prob:.1%}")
+                            if prob < 0.3: st.error("🚨 Exit Signal: Poor Technical Alignment.")
+                            elif prob > 0.7: st.success("💎 Hold: Strong Alignment.")
+        else:
+            st.info("Your T212 account is connected, but no open positions were found.")
 
 # --- NAVIGATION ---
 if check_password():
