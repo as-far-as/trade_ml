@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "curl-cffi>=0.13.0",
     "joblib>=1.5.3",
     "openai>=2.21.0",
     "plotly>=6.5.2",
