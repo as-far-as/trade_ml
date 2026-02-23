@@ -6,28 +6,28 @@ from etl.fetcher import DataFetcher
 import os
 import time
 
-def get_market_status(market_code):
-    """Returns a status string and icon based on exchange hours."""
-    # Define timezones for your markets
-    tz_map = {
-        "US": "US/Eastern",
-        "ES": "Europe/Madrid",
-        "UK": "Europe/London"
-    }
+# def get_market_status(market_code):
+    # """Returns a status string and icon based on exchange hours."""
+    # # Define timezones for your markets
+    # tz_map = {
+    #     "US": "US/Eastern",
+    #     "ES": "Europe/Madrid",
+    #     "UK": "Europe/London"
+    # }
     
-    tz = pytz.timezone(tz_map.get(market_code, "UTC"))
-    now = datetime.now(tz)
+    # tz = pytz.timezone(tz_map.get(market_code, "UTC"))
+    # now = datetime.now(tz)
     
-    # Standard Market Hours: 09:00 - 17:30
-    is_weekday = now.weekday() < 5
-    is_hours = 9 <= now.hour < 17 or (now.hour == 17 and now.minute <= 30)
+    # # Standard Market Hours: 09:00 - 17:30
+    # is_weekday = now.weekday() < 5
+    # is_hours = 9 <= now.hour < 17 or (now.hour == 17 and now.minute <= 30)
     
-    if is_weekday and is_hours:
-        return "🟢 Open", "Normal Trading"
-    elif is_weekday:
-        return "🔴 Closed", "After Hours"
-    else:
-        return "🔴 Closed", "Weekend"
+    # if is_weekday and is_hours:
+    #     return "🟢 Open", "Normal Trading"
+    # elif is_weekday:
+    #     return "🔴 Closed", "After Hours"
+    # else:
+    #     return "🔴 Closed", "Weekend"
 
 # --- UI COMPONENT: TOP STATUS BAR ---
 cols = st.columns(3)
