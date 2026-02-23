@@ -13,12 +13,12 @@ session.headers.update({
 class DataFetcher:
     def __init__(self, ticker):
         self.ticker = ticker
-        # 2. Attach the session to the yfinance Ticker
-        self.stock = yf.Ticker(ticker, session=session)
+        # yfinance now handles its own session/browser impersonation internally
+        self.stock = yf.Ticker(ticker) 
 
-    def fetch_historical_data(self, period="2y", interval="1d", delay=1):
+    def fetch_historical_data(self, period="2y", interval="1d", delay=1.5):
         """Extracts historical price and volume data with a safety delay."""
-        # A tiny sleep helps prevent RateLimitErrors in loops
+        # Keep the delay! It's still vital for Streamlit Cloud
         if delay > 0:
             time.sleep(delay)
             
