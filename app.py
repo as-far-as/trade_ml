@@ -49,14 +49,15 @@ def check_password():
 
 # --- TRADING 212 API (BASIC AUTH) ---
 def get_t212_positions():
-    # Toggle this to True if using a Practice Account
-    IS_DEMO = False 
-    base_url = "demo.trading212.com" if IS_DEMO else "live.trading212.com"
-    url = f"https://{base_url}/api/v0/equity/positions"
+    # Attempt to pull from secrets
+    key_id = st.secrets.get("t212_key_id", "").strip()
+    secret = st.secrets.get("t212_secret", "").strip()
     
-    key_id = st.secrets.get("t212_key_id")
-    secret = st.secrets.get("t212_secret")
-    
+    if not key_id or not secret:
+        st.error("🔑 Secrets missing! Check your .streamlit/secrets.toml file structure.")
+        return None
+
+    # Basic Auth Encoding
     auth_bytes = f"{key_id}:{secret}".encode("utf-8")
     encoded_auth = base64.b64encode(auth_bytes).decode("utf-8")
     
@@ -65,18 +66,26 @@ def get_t212_positions():
         "Accept": "application/json"
     }
     
+    # Try LIVE first
+    url = "https://live.trading212.com/api/v0/equity/positions"
+    
     try:
         response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 401:
-            st.error(f"🚫 401 Unauthorized: The keys for the {'DEMO' if IS_DEMO else 'LIVE'} server were rejected. Check your API permissions in the T212 app.")
+        
+        if response.status_code == 401:
+            # Automatic fallback check for Demo if Live fails
+            demo_url = "https://demo.trading212.com/api/v0/equity/positions"
+            demo_res = requests.get(demo_url, headers=headers)
+            if demo_res.status_code == 200:
+                st.warning("⚠️ Your keys worked on the DEMO server, but not LIVE. Switching to Demo data.")
+                return demo_res.json()
+            
+            st.error("🚫 401: Both Live and Demo rejected these keys. Please re-generate them in T212.")
             return None
-        else:
-            st.error(f"T212 Error {response.status_code}: {response.text}")
-            return None
+            
+        return response.json() if response.status_code == 200 else None
     except Exception as e:
-        st.error(f"Connection failed: {e}")
+        st.error(f"Network Error: {e}")
         return None
 
 # --- SHARED UTILITIES ---
