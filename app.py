@@ -12,6 +12,7 @@ import base64
 import requests
 import requests_cache
 from requests import Session
+from curl_cffi import requests as curl_requests
 
 # --- CACHED SESSION SETUP ---
 # This creates a local cache so you don't keep hitting Yahoo's servers 
@@ -20,6 +21,26 @@ session = requests_cache.CachedSession('yfinance.cache')
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 })
+
+# --- BROWSER MIMICRY PATCH ---
+# This forces yfinance to look exactly like a real Chrome browser 
+# to bypass the shared IP block on Streamlit Cloud.
+session = curl_requests.Session(impersonate="chrome")
+
+def fetch_processed_data(ticker):
+    try:
+        # Pass the "impersonated" session to the Ticker
+        ticker_obj = yf.Ticker(ticker, session=session)
+        # Force a fresh fetch with a slightly longer timeout
+        hist_df = ticker_obj.history(period="1y")
+        
+        # Now pass to your DataFetcher (or add indicators here directly)
+        from etl.fetcher import DataFetcher
+        fetcher = DataFetcher(ticker)
+        return fetcher.add_indicators(hist_df)
+    except Exception as e:
+        st.error(f"⚠️ Yahoo Blocked Ticker {ticker}: {str(e)}")
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600) # Increase TTL to 1 hour to reduce hits
 def fetch_processed_data(ticker):
