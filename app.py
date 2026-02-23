@@ -9,6 +9,29 @@ from datetime import datetime
 import yfinance as yf
 import requests
 import base64
+import requests
+import requests_cache
+from requests import Session
+
+# --- CACHED SESSION SETUP ---
+# This creates a local cache so you don't keep hitting Yahoo's servers 
+# for the same stock over and over.
+session = requests_cache.CachedSession('yfinance.cache')
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+})
+
+@st.cache_data(ttl=3600) # Increase TTL to 1 hour to reduce hits
+def fetch_processed_data(ticker):
+    try:
+        # Pass the session to the DataFetcher (ensure your DataFetcher class accepts it)
+        fetcher = DataFetcher(ticker, session=session)
+        hist_df = fetcher.fetch_historical_data(period="1y")
+        return fetcher.add_indicators(hist_df)
+    except Exception as e:
+        if "RateLimitError" in str(e):
+            st.error(f"⚠️ Yahoo Finance is rate-limiting the cloud server. Retrying with a different session...")
+        return pd.DataFrame()
 
 # --- SETTINGS & CONFIG ---
 st.set_page_config(page_title="Trade AI: War Room", layout="wide")
