@@ -4,7 +4,6 @@ import joblib
 import plotly.graph_objects as go
 from etl.fetcher import DataFetcher
 import os
-import time
 import pytz
 from datetime import datetime
 import yfinance as yf
@@ -23,21 +22,24 @@ WATCHLIST = [
 ]
 
 TOOLTIPS = {
-    "RSI": "Relative Strength Index (0-100). Below 30 is 'Oversold' (Potential Buy), above 70 is 'Overbought'.",
+    "RSI": "Relative Strength Index (0-100). Below 30 is 'Oversold', above 70 is 'Overbought'.",
     "AI Conviction": "ML model confidence (0-100%) that current data matches a historical 'Buy' pattern.",
     "Vol": "Volatility (Std Dev of returns). High values indicate large price swings.",
-    "MA50": "The 50-day Moving Average. Often used to identify short-term trends."
+    "MA50": "The 50-day Moving Average trend line."
 }
 
-# --- SECURITY (Using st.secrets) ---
+# --- SECURITY & DEBUG ---
 def check_password():
-    """Checks if the password in session state matches the secret."""
     if "password_correct" not in st.session_state:
         st.title("🦅 Dip-Hunter Access")
-        # Use the password from secrets.toml
+        
+        # DEBUG SECTION: Shows if secrets are loaded
+        if not st.secrets:
+            st.error("⚠️ No secrets.toml detected. Check your .streamlit folder.")
+        
         pwd_input = st.text_input("Enter credentials", type="password")
         if st.button("Login"):
-            if pwd_input == st.secrets["password"]:
+            if pwd_input == st.secrets.get("password"):
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
@@ -45,13 +47,43 @@ def check_password():
         return False
     return True
 
+# --- TRADING 212 API (BASIC AUTH) ---
+def get_t212_positions():
+    """Fetches live positions using ID:Secret pair from secrets.toml"""
+    url = "https://live.trading212.com/api/v0/equity/positions"
+    
+    key_id = st.secrets.get("t212_key_id")
+    secret = st.secrets.get("t212_secret")
+    
+    if not key_id or not secret:
+        st.error("Missing T212 Key ID or Secret in secrets.toml")
+        return None
+
+    # Encode ID:Secret for Basic Auth
+    auth_bytes = f"{key_id}:{secret}".encode("utf-8")
+    encoded_auth = base64.b64encode(auth_bytes).decode("utf-8")
+    
+    headers = {
+        "Authorization": f"Basic {encoded_auth}",
+        "Accept": "application/json"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"T212 Error {response.status_code}: {response.text}")
+            return None
+    except Exception as e:
+        st.error(f"Connection failed: {e}")
+        return None
+
 # --- SHARED UTILITIES ---
 @st.cache_resource
 def load_assets():
-    try:
-        return joblib.load('models/random_forest_model.pkl')
-    except:
-        return None
+    try: return joblib.load('models/random_forest_model.pkl')
+    except: return None
 
 ml_model = load_assets()
 
@@ -77,36 +109,6 @@ def create_price_chart(df, ticker, buy_prob):
     fig.update_layout(template="plotly_dark", xaxis_rangeslider_visible=False, height=400, margin=dict(l=10, r=10, t=30, b=10))
     return fig
 
-# --- TRADING 212 INTEGRATION ---
-def get_t212_positions():
-    """Fetches live positions using Basic Auth (ID:Secret)."""
-    url = "https://live.trading212.com/api/v0/equity/positions"
-    
-    # Verify the keys exist in secrets first to avoid a crash
-    if "t212_key_id" not in st.secrets or "t212_secret" not in st.secrets:
-        st.error("Missing 't212_key_id' or 't212_secret' in .streamlit/secrets.toml")
-        return None
-
-    # Combine ID and Secret for Basic Auth
-    auth_str = f"{st.secrets['t212_key_id']}:{st.secrets['t212_secret']}"
-    encoded_auth = base64.b64encode(auth_str.encode()).decode()
-    
-    headers = {
-        "Authorization": f"Basic {encoded_auth}",
-        "Accept": "application/json"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            st.error(f"T212 API Error {response.status_code}: {response.text}")
-            return None
-    except Exception as e:
-        st.error(f"Connection failed: {e}")
-        return None
-
 # --- PAGE 1: WAR ROOM ---
 def show_war_room():
     st.title("🦅 Trade AI: War Room")
@@ -116,22 +118,21 @@ def show_war_room():
         m_cols[i].metric(label, status, f"Local Time: {local_time}")
     
     st.markdown("---")
-    dashboard_data = []
-    all_ticker_dfs = {}
+    dashboard_data, all_ticker_dfs = [], {}
 
     with st.spinner('Syncing Watchlist...'):
         for item in WATCHLIST:
             ticker = item["Ticker"]
-            full_data = fetch_processed_data(ticker)
-            if not full_data.empty:
-                latest = full_data.iloc[-1]
-                all_ticker_dfs[ticker] = full_data
+            data = fetch_processed_data(ticker)
+            if not data.empty:
+                latest = data.iloc[-1]
+                all_ticker_dfs[ticker] = data
                 features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
-                buy_prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
-                dashboard_data.append({"Ticker": ticker, "Price": latest['Close'], "RSI": latest['RSI'], "AI Conviction": buy_prob, "Vol": latest['Volatility']})
+                prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
+                dashboard_data.append({"Ticker": ticker, "Price": latest['Close'], "RSI": latest['RSI'], "AI Conviction": prob, "Vol": latest['Volatility']})
 
-    df_display = pd.DataFrame(dashboard_data)
-    st.dataframe(df_display.style.format({"Price": "{:.2f}", "AI Conviction": "{:.1%}", "RSI": "{:.1f}", "Vol": "{:.4f}"}), use_container_width=True, hide_index=True)
+    df_disp = pd.DataFrame(dashboard_data)
+    st.dataframe(df_disp.style.format({"Price": "{:.2f}", "AI Conviction": "{:.1%}", "RSI": "{:.1f}", "Vol": "{:.4f}"}), use_container_width=True, hide_index=True)
     
     tabs = st.tabs([d["Ticker"] for d in dashboard_data])
     for i, tab in enumerate(tabs):
@@ -145,7 +146,7 @@ def show_war_room():
 # --- PAGE 2: SCANNER ---
 def show_scanner():
     st.title("🔍 AI Ticker Scanner")
-    search_query = st.text_input("Search by Company Name or Ticker")
+    search_query = st.text_input("Enter Company Name or Ticker")
     if search_query:
         results = yf.Search(search_query, max_results=5).quotes
         if results:
@@ -157,39 +158,35 @@ def show_scanner():
                     latest = data.iloc[-1]
                     features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                     prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
-                    c1, c2, c3 = st.columns(3)
+                    c1, c2 = st.columns(2)
                     c1.metric("AI Conviction", f"{prob:.1%}", help=TOOLTIPS["AI Conviction"])
-                    c2.metric("RSI", f"{latest['RSI']:.1f}", help=TOOLTIPS["RSI"])
+                    c2.metric("RSI", f"{latest['RSI']:.1f}")
                     st.plotly_chart(create_price_chart(data, target, prob))
 
 # --- PAGE 3: PORTFOLIO ---
 def show_portfolio():
-    st.title("💰 Trading 212 Live Portfolio")
+    st.title("💰 My Live Portfolio")
     
-    # Logic now attempts to use the secret key automatically
-    if "t212_api_key" not in st.secrets:
-        st.warning("No T212 API Key found in secrets. Please add it to .streamlit/secrets.toml")
+    # Verify both keys exist in secrets
+    if "t212_key_id" not in st.secrets or "t212_secret" not in st.secrets:
+        st.warning("⚠️ No T212 credentials found. Check your secrets.toml file.")
         return
 
     positions = get_t212_positions()
     if positions:
-        st.success(f"Synced {len(positions)} positions from account.")
-        portfolio_data = []
-        
+        st.success(f"Synced {len(positions)} positions.")
+        portfolio_list = []
         for pos in positions:
-            # Clean ticker for yfinance (removes _US_EQ etc)
             ticker = pos['ticker'].split('_')[0] 
-            portfolio_data.append({
-                "Ticker": ticker,
-                "Qty": pos['quantity'],
-                "Current Price": pos['currentPrice'],
-                "P&L": f"{pos['ppl']:.2f} {pos['currency']}"
+            portfolio_list.append({
+                "Ticker": ticker, "Qty": pos['quantity'], 
+                "Price": pos['currentPrice'], "P&L": f"{pos['ppl']:.2f} {pos['currency']}"
             })
         
-        df_p = pd.DataFrame(portfolio_data)
-        st.dataframe(df_p, use_container_width=True, hide_index=True)
+        df_p = pd.DataFrame(portfolio_list)
+        st.table(df_p)
 
-        if st.button("Run AI Portfolio Health Check"):
+        if st.button("Run AI Health Check"):
             for ticker in df_p['Ticker']:
                 with st.expander(f"Audit: {ticker}"):
                     data = fetch_processed_data(ticker)
@@ -198,8 +195,8 @@ def show_portfolio():
                         features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                         prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
                         st.metric("AI Conviction", f"{prob:.1%}")
-                        if prob < 0.3: st.error("🚨 Warning: Poor Technical Alignment.")
-                        elif prob > 0.7: st.success("💎 Strong Alignment.")
+                        if prob < 0.3: st.error("🚨 Exit Signal: Poor Technical Setup.")
+                        elif prob > 0.7: st.success("💎 Hold: Strong Alignment.")
 
 # --- NAVIGATION ---
 if check_password():
