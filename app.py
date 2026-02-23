@@ -9,6 +9,7 @@ import pytz
 from datetime import datetime
 import yfinance as yf
 import requests
+import base64
 
 # --- SETTINGS & CONFIG ---
 st.set_page_config(page_title="Trade AI: War Room", layout="wide")
@@ -78,14 +79,29 @@ def create_price_chart(df, ticker, buy_prob):
 
 # --- TRADING 212 INTEGRATION ---
 def get_t212_positions():
-    """Fetches live positions using the API key from st.secrets."""
+    """Fetches live positions using Basic Auth (ID:Secret)."""
     url = "https://live.trading212.com/api/v0/equity/positions"
-    # Pulling from st.secrets
-    headers = {"Authorization": st.secrets["t212_api_key"]}
+    
+    # 1. Get the pair from secrets
+    key_id = st.secrets["t212_key_id"]
+    secret = st.secrets["t212_secret"]
+    
+    # 2. Format for Basic Auth: "ID:Secret" then Base64 encode it
+    auth_str = f"{key_id}:{secret}"
+    encoded_auth = base64.b64encode(auth_str.encode()).decode()
+    
+    headers = {
+        "Authorization": f"Basic {encoded_auth}",
+        "Accept": "application/json"
+    }
+    
     try:
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             return response.json()
+        elif response.status_code == 401:
+            st.error("Authentication Failed: Check your Key ID and Secret.")
+            return None
         else:
             st.error(f"T212 API Error: {response.status_code}")
             return None
