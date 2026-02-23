@@ -33,7 +33,6 @@ def check_password():
     if "password_correct" not in st.session_state:
         st.title("🦅 Dip-Hunter Access")
         
-        # DEBUG SECTION: Shows if secrets are loaded
         if not st.secrets:
             st.error("⚠️ No secrets.toml detected. Check your .streamlit folder.")
         
@@ -49,7 +48,6 @@ def check_password():
 
 # --- TRADING 212 API (BASIC AUTH) ---
 def get_t212_positions():
-    # Attempt to pull from secrets
     key_id = st.secrets.get("t212_key_id", "").strip()
     secret = st.secrets.get("t212_secret", "").strip()
     
@@ -57,7 +55,6 @@ def get_t212_positions():
         st.error("🔑 Secrets missing! Check your .streamlit/secrets.toml file structure.")
         return None
 
-    # Basic Auth Encoding
     auth_bytes = f"{key_id}:{secret}".encode("utf-8")
     encoded_auth = base64.b64encode(auth_bytes).decode("utf-8")
     
@@ -66,14 +63,12 @@ def get_t212_positions():
         "Accept": "application/json"
     }
     
-    # Try LIVE first
     url = "https://live.trading212.com/api/v0/equity/positions"
     
     try:
         response = requests.get(url, headers=headers)
         
         if response.status_code == 401:
-            # Automatic fallback check for Demo if Live fails
             demo_url = "https://demo.trading212.com/api/v0/equity/positions"
             demo_res = requests.get(demo_url, headers=headers)
             if demo_res.status_code == 200:
@@ -179,23 +174,23 @@ def show_portfolio():
     positions = get_t212_positions()
     
     if positions:
-        # --- 🔍 DIAGNOSTIC TOOL ---
-        st.warning("API Data Inspector: Here is the raw data for your first position.")
-        st.json(positions[0]) 
-        # --------------------------
-
         portfolio_list = []
         for pos in positions:
-            # Added a few more common API fallbacks just in case
-            raw_ticker = pos.get('ticker') or pos.get('symbol') or pos.get('instrumentCode') or pos.get('name') or "UNKNOWN"
+            # 1. Correctly target the nested 'instrument' dictionary
+            instrument = pos.get('instrument', {})
+            raw_ticker = instrument.get('ticker', 'UNKNOWN')
             ticker = str(raw_ticker).split('_')[0] 
+            
+            # 2. Correctly target the nested 'walletImpact' dictionary
+            wallet = pos.get('walletImpact', {})
+            pnl_value = wallet.get('unrealizedProfitLoss', 0.0)
+            pnl_currency = wallet.get('currency', '')
             
             portfolio_list.append({
                 "Ticker": ticker,
                 "Qty": pos.get('quantity', 0), 
                 "Price": pos.get('currentPrice', 0), 
-                # Checking for 'ppl' or 'unrealisedPl' or 'result'
-                "P&L": f"{pos.get('ppl', pos.get('unrealisedPl', 0)):.2f}" 
+                "P&L": f"{pnl_value:.2f} {pnl_currency}".strip()
             })
         
         df_p = pd.DataFrame(portfolio_list)
