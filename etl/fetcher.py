@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import requests
 import streamlit as st
+from datetime import datetime 
 
 class DataFetcher:
     def __init__(self, ticker):
@@ -93,7 +94,7 @@ class DataFetcher:
         
         # Start at a random price between 50 and 200
         start_price = np.random.uniform(50, 200)
-        # Create a random walk (simulating daily volatility)
+        # Create a random walk
         changes = np.random.normal(0.001, 0.02, 100) 
         price_path = start_price * (1 + changes).cumprod()
         
