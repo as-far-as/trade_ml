@@ -1,71 +1,93 @@
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import time
-from requests import Session
-
-# 1. Create a persistent session to bypass 'crumb' errors
-session = Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
-})
+import requests
+import streamlit as st
 
 class DataFetcher:
     def __init__(self, ticker):
         self.ticker = ticker
-        # yfinance now handles its own session/browser impersonation internally
-        self.stock = yf.Ticker(ticker) 
+        self.api_key = st.secrets.get("ALPHA_VANTAGE_KEY")
+        self.base_url = "https://www.alphavantage.co/query"
 
-    def fetch_historical_data(self, period="2y", interval="1d", delay=1.5):
-        """Extracts historical price and volume data with a safety delay."""
-        # Keep the delay! It's still vital for Streamlit Cloud
-        if delay > 0:
-            time.sleep(delay)
+    def fetch_historical_data(self, period="1y", interval="daily"):
+        """
+        Fetches daily price data. 
+        Note: Free tier allows 25 requests/day.
+        """
+        params = {
+            "function": "TIME_SERIES_DAILY",
+            "symbol": self.ticker,
+            "outputsize": "compact", # 'compact' returns last 100 days; 'full' returns 20 years
+            "apikey": self.api_key
+        }
+        
+        try:
+            response = requests.get(self.base_url, params=params)
+            data = response.json()
             
-        df = self.stock.history(period=period, interval=interval)
-        return df
+            if "Time Series (Daily)" not in data:
+                print(f"Error fetching {self.ticker}: {data.get('Note', 'Check API Key')}")
+                return pd.DataFrame()
+
+            # Parse JSON to DataFrame
+            df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient='index')
+            df.index = pd.to_datetime(df.index)
+            df = df.sort_index()
+            # Rename columns to match your original yfinance style
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            df = df.astype(float)
+            return df
+            
+        except Exception as e:
+            print(f"Connection Error: {e}")
+            return pd.DataFrame()
 
     def fetch_fundamentals(self):
-        """Extracts key ratios: P/E, Forward P/E, and Earnings info."""
-        info = self.stock.info
-        # Use .get() to avoid KeyErrors if Yahoo returns empty data
-        fundamentals = {
-            "trailingPE": info.get("trailingPE"),
-            "forwardPE": info.get("forwardPE"),
-            "priceToBook": info.get("priceToBook"),
-            "debtToEquity": info.get("debtToEquity"),
-            "revenueGrowth": info.get("revenueGrowth")
+        """Extracts key ratios using the OVERVIEW endpoint."""
+        params = {
+            "function": "OVERVIEW",
+            "symbol": self.ticker,
+            "apikey": self.api_key
         }
-        return fundamentals
+        
+        try:
+            response = requests.get(self.base_url, params=params)
+            info = response.json()
+            
+            # Map Alpha Vantage keys to your existing expected keys
+            return {
+                "trailingPE": info.get("TrailingPE"),
+                "forwardPE": info.get("ForwardPE"),
+                "priceToBook": info.get("PriceToBookRatio"),
+                "debtToEquity": info.get("DebtToEquityRatio"),
+                "revenueGrowth": info.get("QuarterlyRevenueGrowthYOY")
+            }
+        except:
+            return {}
 
     def add_indicators(self, df):
-        """Transformation: Adds RSI and Moving Averages."""
+        """Adds RSI, Moving Averages, and Volatility."""
         if df.empty:
             return df
             
-        # Calculate RSI
+        # 1. RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
+        rs = gain / (loss + 1e-9)
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # Add 50-day and 200-day Moving Averages
+        # 2. Moving Averages
         df['MA50'] = df['Close'].rolling(window=50).mean()
         df['MA200'] = df['Close'].rolling(window=200).mean()
         
-        # Calculate Volatility (Standard Deviation of returns)
+        # 3. Volatility
         df['Returns'] = df['Close'].pct_change()
         df['Volatility'] = df['Returns'].rolling(window=21).std()
         
         return df.dropna()
 
 if __name__ == "__main__":
-    # Test it out
-    fetcher = DataFetcher("AAPL")
-    prices = fetcher.fetch_historical_data()
-    data_with_indicators = fetcher.add_indicators(prices)
-    
-    print(f"--- Data for AAPL ---")
-    print(data_with_indicators.tail(5)) 
-    print(f"\nFundamental Ratios: {fetcher.fetch_fundamentals()}")
+    # For local testing, ensure you have an environment variable or hardcoded key
+    # fetcher = DataFetcher("AAPL")
+    pass
