@@ -137,10 +137,48 @@ def show_scanner():
 
 # --- PAGE 3: PORTFOLIO ---
 def show_portfolio():
-    st.title("💰 Live Portfolio")
-    # (Restored Trading 212 and Audit logic as per original specification)
-    # [Insert your T212 fetching and logic from previous stable versions here]
-    st.info("Portfolio logic restored to original specifications.")
+    st.title("💰 My Live Portfolio")
+    
+    positions = get_t212_positions()
+    
+    if positions:
+        portfolio_list = []
+        for pos in positions:
+            # 1. Correctly target the nested 'instrument' dictionary
+            instrument = pos.get('instrument', {})
+            raw_ticker = instrument.get('ticker', 'UNKNOWN')
+            ticker = str(raw_ticker).split('_')[0] 
+            
+            # 2. Correctly target the nested 'walletImpact' dictionary
+            wallet = pos.get('walletImpact', {})
+            pnl_value = wallet.get('unrealizedProfitLoss', 0.0)
+            pnl_currency = wallet.get('currency', '')
+            
+            portfolio_list.append({
+                "Ticker": ticker,
+                "Qty": pos.get('quantity', 0), 
+                "Price": pos.get('currentPrice', 0), 
+                "P&L": f"{pnl_value:.2f} {pnl_currency}".strip()
+            })
+        
+        df_p = pd.DataFrame(portfolio_list)
+        st.dataframe(df_p, use_container_width=True, hide_index=True)
+
+        if st.button("Run AI Health Check"):
+            for ticker in df_p['Ticker']:
+                if ticker == "UNKNOWN": continue
+                with st.expander(f"Audit: {ticker}"):
+                    data = fetch_processed_data(ticker)
+                    if not data.empty:
+                        latest = data.iloc[-1]
+                        features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
+                        prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
+                        st.metric("AI Conviction", f"{prob:.1%}")
+                        if prob < 0.3: st.error("🚨 Exit Signal: Poor Technical Alignment.")
+                        elif prob > 0.7: st.success("💎 Hold: Strong Alignment.")
+    else:
+        st.info("No open positions found or connection failed.")
+
 
 # --- NAVIGATION ---
 if check_password():
