@@ -86,6 +86,26 @@ class DataFetcher:
         df['Volatility'] = df['Returns'].rolling(window=21).std()
         
         return df.dropna()
+    
+    def generate_mock_data(self):
+        """Generates realistic synthetic stock data when API is offline."""
+        date_rng = pd.date_range(end=datetime.now(), periods=100, freq='D')
+        
+        # Start at a random price between 50 and 200
+        start_price = np.random.uniform(50, 200)
+        # Create a random walk (simulating daily volatility)
+        changes = np.random.normal(0.001, 0.02, 100) 
+        price_path = start_price * (1 + changes).cumprod()
+        
+        df = pd.DataFrame({
+            'Close': price_path,
+            'Open': price_path * np.random.uniform(0.98, 1.02, 100),
+            'High': price_path * 1.03,
+            'Low': price_path * 0.97,
+            'Volume': np.random.randint(100000, 1000000, 100)
+        }, index=date_rng)
+        
+        return df
 
 if __name__ == "__main__":
     # For local testing, ensure you have an environment variable or hardcoded key

@@ -4,72 +4,67 @@ import joblib
 import plotly.graph_objects as go
 import os
 import pytz
+import numpy as np
 from datetime import datetime
 import requests
 import base64
+from etl.fetcher import DataFetcher
 
 # --- SETTINGS & CONFIG ---
 st.set_page_config(page_title="Trade AI: War Room", layout="wide")
 
 WATCHLIST = [
     {"Ticker": "CBRE",   "Market": "US"},
-    {"Ticker": "SAN",    "Market": "US"}, # Alpha Vantage works best with US tickers or specific suffixes
+    {"Ticker": "SAN",    "Market": "US"}, 
     {"Ticker": "CSCO",   "Market": "US"},
 ]
 
-# --- ALPHA VANTAGE FETCHING ---
-def fetch_processed_data(ticker):
-    """Fetches data from Alpha Vantage and calculates indicators."""
-    api_key = st.secrets.get("ALPHA_VANTAGE_KEY")
-    url = f'https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&outputsize=compact&apikey={api_key}'
+# --- SIDEBAR & GLOBAL SETTINGS ---
+with st.sidebar:
+    st.header("⚙️ System Control")
+    is_mock = st.toggle(
+        "🛰️ Mock Data Mode", 
+        value=False, 
+        help="Bypass Alpha Vantage and use synthetic data for testing/development."
+    )
+    if st.button("Clear Cache & Refresh"):
+        st.cache_data.clear()
+        st.rerun()
+    st.markdown("---")
+    st.caption("Alpha Vantage Tier: Free (25 req/day)")
+
+# --- SMART FETCHING WITH AUTO-FAILOVER ---
+@st.cache_data(ttl=3600)
+def fetch_processed_data(ticker, use_mock=False):
+    """Fetches data with a safety net: API -> Cache -> Mock Failover."""
+    fetcher = DataFetcher(ticker)
     
-    try:
-        r = requests.get(url)
-        data = r.json()
+    if use_mock:
+        hist_df = fetcher.generate_mock_data()
+    else:
+        hist_df = fetcher.fetch_historical_data()
         
-        # Handle API Limit/Error
-        if "Time Series (Daily)" not in data:
-            st.error(f"Alpha Vantage Error for {ticker}: {data.get('Note', 'Check API Key')}")
-            return pd.DataFrame()
-
-        # Parse JSON to DataFrame
-        df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient='index')
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-        df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-        df = df.astype(float)
-
-        # Basic Indicators (Replacing your DataFetcher logic for stability)
-        df['MA50'] = df['Close'].rolling(window=50).mean()
-        df['MA200'] = df['Close'].rolling(window=200).mean()
-        
-        # Simple RSI calculation
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        
-        df['Volatility'] = df['Close'].pct_change().rolling(window=21).std()
-        
-        return df.dropna()
-    except Exception as e:
-        st.error(f"Connection Error: {e}")
-        return pd.DataFrame()
+        # If API returns empty (Limit hit or error), failover to Mock automatically
+        if hist_df.empty:
+            st.toast(f"⚠️ API Limit hit for {ticker}. Switching to Mock Data.", icon="🛑")
+            hist_df = fetcher.generate_mock_data()
+            
+    return fetcher.add_indicators(hist_df)
 
 # --- SECURITY ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.title("🦅 Dip-Hunter Access")
         if not st.secrets.get("password"):
-            st.error("⚠️ No password found in secrets.toml.")
+            st.error("⚠️ Setup Error: No password found in secrets.toml.")
+        
         pwd_input = st.text_input("Enter credentials", type="password")
         if st.button("Login"):
             if pwd_input == st.secrets.get("password"):
                 st.session_state["password_correct"] = True
                 st.rerun()
             else:
-                st.error("😕 Password incorrect")
+                st.error("😕 Access Denied")
         return False
     return True
 
@@ -86,13 +81,16 @@ def get_t212_positions():
     try:
         res = requests.get("https://live.trading212.com/api/v0/equity/positions", headers=headers)
         return res.json() if res.status_code == 200 else None
-    except: return None
+    except:
+        return None
 
 # --- SHARED UTILITIES ---
 @st.cache_resource
 def load_assets():
-    try: return joblib.load('models/random_forest_model.pkl')
-    except: return None
+    try:
+        return joblib.load('models/random_forest_model.pkl')
+    except:
+        return None
 
 ml_model = load_assets()
 
@@ -100,27 +98,47 @@ def create_price_chart(df, ticker):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name='Price', line=dict(color='#00d4ff', width=2)))
     fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], name='50 MA', line=dict(color='rgba(255, 255, 255, 0.4)', dash='dash')))
-    fig.update_layout(template="plotly_dark", height=400, margin=dict(l=10, r=10, t=30, b=10))
+    fig.update_layout(
+        template="plotly_dark", 
+        height=400, 
+        margin=dict(l=10, r=10, t=30, b=10),
+        xaxis_rangeslider_visible=False
+    )
     return fig
 
 # --- PAGE: WAR ROOM ---
 def show_war_room():
     st.title("🦅 Trade AI: War Room")
+    if is_mock: st.info("📢 System running on Mock Data")
     st.markdown("---")
     
     dashboard_data = []
-    with st.spinner('Fetching Alpha Vantage Data...'):
+    with st.spinner('Syncing Market Data...'):
         for item in WATCHLIST:
-            df = fetch_processed_data(item["Ticker"])
+            df = fetch_processed_data(item["Ticker"], use_mock=is_mock)
             if not df.empty:
                 latest = df.iloc[-1]
-                # ML Logic
+                # ML Logic - ensure features match model training
                 features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                 prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
-                dashboard_data.append({"Ticker": item["Ticker"], "Price": latest['Close'], "RSI": latest['RSI'], "Conviction": prob})
+                
+                dashboard_data.append({
+                    "Ticker": item["Ticker"], 
+                    "Price": f"${latest['Close']:.2f}", 
+                    "RSI": round(latest['RSI'], 1), 
+                    "AI Conviction": f"{prob:.1%}"
+                })
 
     if dashboard_data:
-        st.table(pd.DataFrame(dashboard_data))
+        st.dataframe(pd.DataFrame(dashboard_data), use_container_width=True, hide_index=True)
+        
+        # Details Tabs
+        tabs = st.tabs([d["Ticker"] for d in dashboard_data])
+        for i, tab in enumerate(tabs):
+            with tab:
+                ticker = dashboard_data[i]["Ticker"]
+                df = fetch_processed_data(ticker, use_mock=is_mock)
+                st.plotly_chart(create_price_chart(df, ticker), use_container_width=True)
 
 # --- PAGE: PORTFOLIO ---
 def show_portfolio():
@@ -138,21 +156,41 @@ def show_portfolio():
                 "Ticker": ticker,
                 "Qty": pos.get('quantity', 0), 
                 "Price": pos.get('currentPrice', 0), 
-                "P&L": f"{wallet.get('unrealizedProfitLoss', 0.0):.2f} {wallet.get('currency', '')}"
+                "P&L": wallet.get('unrealizedProfitLoss', 0.0),
+                "Currency": wallet.get('currency', '')
             })
         
         df_p = pd.DataFrame(portfolio_list)
-        st.dataframe(df_p, use_container_width=True)
+        
+        # Styling the dataframe
+        def color_pnl(val):
+            color = '#00ff00' if val >= 0 else '#ff4b4b'
+            return f'color: {color}'
 
-        if st.button("Run AI Health Check"):
+        st.dataframe(
+            df_p.style.applymap(color_pnl, subset=['P&L']).format({"P&L": "{:.2f}"}),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.markdown("---")
+        if st.button("🛡️ Run AI Risk Audit"):
             for t in df_p['Ticker']:
-                with st.expander(f"Audit: {t}"):
-                    data = fetch_processed_data(t)
+                with st.expander(f"Audit Analysis: {t}"):
+                    data = fetch_processed_data(t, use_mock=is_mock)
                     if not data.empty:
                         latest = data.iloc[-1]
                         feat = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                         prob = ml_model.predict_proba(feat)[0][1] if ml_model else 0.5
-                        st.metric("AI Conviction", f"{prob:.1%}")
+                        
+                        c1, c2 = st.columns(2)
+                        c1.metric("AI Health Score", f"{prob:.1%}")
+                        c2.metric("RSI Level", f"{latest['RSI']:.1f}")
+                        
+                        if prob < 0.3: st.error("🚨 WARNING: Technical setup deteriorating.")
+                        elif prob > 0.7: st.success("💎 STRONG HOLD: Pattern matches historical winners.")
+    else:
+        st.info("No open positions found or Trading 212 API connection failed.")
 
 # --- NAVIGATION ---
 if check_password():
