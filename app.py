@@ -33,13 +33,15 @@ with st.sidebar:
     is_mock = st.toggle("🛰️ Mock Data Mode", value=False, help="Use synthetic data if API is down.")
     if st.button("Clear Cache & Refresh"):
         st.cache_data.clear()
+        st.session_state.market_data = {} # Clear session lock too
         st.rerun()
 
 # --- SMART FETCHING WRAPPER ---
 @st.cache_data(ttl=3600)
 def fetch_processed_data(ticker, use_mock=False):
+    """Cached data retrieval logic."""
     fetcher = DataFetcher(ticker)
-    is_actual_mock = False # Track if we actually used mock data
+    is_actual_mock = False
     
     if use_mock:
         hist_df = fetcher.generate_mock_data()
@@ -50,8 +52,18 @@ def fetch_processed_data(ticker, use_mock=False):
             hist_df = fetcher.generate_mock_data()
             is_actual_mock = True
             
-    # Return both the data AND a flag indicating if it's mock data
     return fetcher.add_indicators(hist_df), is_actual_mock
+
+def get_data_buffered(ticker, use_mock):
+    """Session-based buffer to prevent redundant API calls during navigation."""
+    if "market_data" not in st.session_state:
+        st.session_state.market_data = {}
+
+    # Only fetch if we don't have it in current session
+    if ticker not in st.session_state.market_data:
+        st.session_state.market_data[ticker] = fetch_processed_data(ticker, use_mock)
+    
+    return st.session_state.market_data[ticker]
 
 # --- UTILITIES ---
 def get_market_info(market_code):
@@ -95,7 +107,6 @@ def get_t212_positions():
     key_id = st.secrets.get("t212_key_id", "").strip()
     secret = st.secrets.get("t212_secret", "").strip()
     if not key_id or not secret:
-        st.error("🔑 Secrets missing! Check your t212_key_id and t212_secret in Streamlit.")
         return None
 
     auth_bytes = f"{key_id}:{secret}".encode("utf-8")
@@ -105,12 +116,8 @@ def get_t212_positions():
     url = "https://live.trading212.com/api/v0/equity/positions"
     try:
         response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json()
-        return None
-    except Exception as e:
-        st.error(f"Network Error: {e}")
-        return None
+        return response.json() if response.status_code == 200 else None
+    except: return None
 
 # --- PAGE 1: WAR ROOM ---
 def show_war_room():
@@ -126,10 +133,10 @@ def show_war_room():
     with st.spinner('Syncing Watchlist...'):
         for item in WATCHLIST:
             ticker = item["Ticker"]
-            data, was_mocked = fetch_processed_data(ticker, use_mock=is_mock)
+            data, was_mocked = get_data_buffered(ticker, is_mock)
             
             if was_mocked and not is_mock:
-                st.toast(f"⚠️ API limit hit for {ticker}. Using Mock Data.", icon="🛑")
+                st.toast(f"⚠️ API Limit hit for {ticker}. Mocked.", icon="🛑")
             
             if not data.empty:
                 latest = data.iloc[-1]
@@ -154,11 +161,13 @@ def show_war_room():
 # --- PAGE 2: SCANNER ---
 def show_scanner():
     st.title("🔍 AI Ticker Scanner")
-    target = st.text_input("Enter Ticker (e.g. AAPL, MSFT)").upper()
+    target = st.text_input("Enter Ticker (e.g. AAPL)").upper()
     if target:
         if st.button(f"Analyze {target}"):
-            data = fetch_processed_data(target, use_mock=is_mock)
+            # Unpacking correctly here
+            data, was_mocked = get_data_buffered(target, is_mock)
             if not data.empty:
+                if was_mocked: st.warning("Note: Using Mock Data.")
                 latest = data.iloc[-1]
                 features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                 prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
@@ -175,41 +184,29 @@ def show_portfolio():
     if positions:
         portfolio_list = []
         for pos in positions:
-            instrument = pos.get('instrument', {})
-            ticker = str(instrument.get('ticker', 'UNKNOWN')).split('_')[0] 
+            ticker = str(pos.get('instrument', {}).get('ticker', 'UNKNOWN')).split('_')[0] 
             wallet = pos.get('walletImpact', {})
-            pnl_val = wallet.get('unrealizedProfitLoss', 0.0)
-            
             portfolio_list.append({
-                "Ticker": ticker,
-                "Qty": pos.get('quantity', 0), 
+                "Ticker": ticker, "Qty": pos.get('quantity', 0), 
                 "Price": pos.get('currentPrice', 0), 
-                "P&L": pnl_val,
-                "Cur": wallet.get('currency', '')
+                "P&L": wallet.get('unrealizedProfitLoss', 0.0), "Cur": wallet.get('currency', '')
             })
         
         df_p = pd.DataFrame(portfolio_list)
-        
-        def color_pnl(val):
-            color = '#00ff00' if val >= 0 else '#ff4b4b'
-            return f'color: {color}'
-
-        st.dataframe(
-            df_p.style.applymap(color_pnl, subset=['P&L']).format({"P&L": "{:.2f}"}),
-            use_container_width=True, hide_index=True
-        )
+        st.dataframe(df_p.style.format({"P&L": "{:.2f}"}), use_container_width=True, hide_index=True)
 
         if st.button("🛡️ Run AI Risk Audit"):
             for t in df_p['Ticker']:
                 with st.expander(f"Audit: {t}"):
-                    data = fetch_processed_data(t, use_mock=is_mock)
+                    # Unpacking correctly here
+                    data, was_mocked = get_data_buffered(t, is_mock)
                     if not data.empty:
                         latest = data.iloc[-1]
                         feat = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                         prob = ml_model.predict_proba(feat)[0][1] if ml_model else 0.5
                         st.metric("AI Conviction", f"{prob:.1%}")
     else:
-        st.info("No open positions found or connection failed.")
+        st.info("No open positions found.")
 
 # --- NAVIGATION ---
 if check_password():

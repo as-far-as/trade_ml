@@ -7,40 +7,29 @@ from datetime import datetime
 class DataFetcher:
     def __init__(self, ticker):
         self.ticker = ticker
-        self.api_key = st.secrets.get("ALPHA_VANTAGE_KEY")
-        self.base_url = "https://www.alphavantage.co/query"
+        self.api_key = st.secrets.get("FMP_API_KEY")
+        self.base_url = "https://financialmodelingprep.com/api/v3"
 
-    def fetch_historical_data(self, period="1y", interval="daily"):
-        """
-        Fetches daily price data. 
-        Note: Free tier allows 25 requests/day.
-        """
-        params = {
-            "function": "TIME_SERIES_DAILY",
-            "symbol": self.ticker,
-            "outputsize": "compact", # 'compact' returns last 100 days; 'full' returns 20 years
-            "apikey": self.api_key
-        }
-        
+    def fetch_historical_data(self):
+        """Fetches daily prices from FMP (250 req/day limit)."""
+        url = f"{self.base_url}/historical-price-full/{self.ticker}?apikey={self.api_key}"
         try:
-            response = requests.get(self.base_url, params=params)
+            response = requests.get(url)
             data = response.json()
             
-            if "Time Series (Daily)" not in data:
-                print(f"Error fetching {self.ticker}: {data.get('Note', 'Check API Key')}")
+            if "historical" not in data:
                 return pd.DataFrame()
 
-            # Parse JSON to DataFrame
-            df = pd.DataFrame.from_dict(data["Time Series (Daily)"], orient='index')
-            df.index = pd.to_datetime(df.index)
+            df = pd.DataFrame(data["historical"])
+            df['date'] = pd.to_datetime(df['date'])
+            df.set_index('date', inplace=True)
             df = df.sort_index()
-            # Rename columns to match your original yfinance style
-            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            df = df.astype(float)
-            return df
             
-        except Exception as e:
-            print(f"Connection Error: {e}")
+            # Standardize column names for your indicators
+            df = df[['open', 'high', 'low', 'close', 'volume']]
+            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            return df
+        except:
             return pd.DataFrame()
 
     def fetch_fundamentals(self):
