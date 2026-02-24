@@ -126,7 +126,11 @@ def show_war_room():
     with st.spinner('Syncing Watchlist...'):
         for item in WATCHLIST:
             ticker = item["Ticker"]
-            data = fetch_processed_data(ticker, use_mock=is_mock)
+            data, was_mocked = fetch_processed_data(ticker, use_mock=is_mock)
+            
+            if was_mocked and not is_mock:
+                st.toast(f"⚠️ API limit hit for {ticker}. Using Mock Data.", icon="🛑")
+            
             if not data.empty:
                 latest = data.iloc[-1]
                 all_ticker_dfs[ticker] = data
