@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import pytz
 import base64
 import requests
+import numpy as np
 from datetime import datetime
 from etl.fetcher import DataFetcher
 
@@ -84,6 +85,28 @@ def check_password():
         return False
     return True
 
+# --- TRADING 212 INTEGRATION ---
+def get_t212_positions():
+    key_id = st.secrets.get("t212_key_id", "").strip()
+    secret = st.secrets.get("t212_secret", "").strip()
+    if not key_id or not secret:
+        st.error("🔑 Secrets missing! Check your t212_key_id and t212_secret in Streamlit.")
+        return None
+
+    auth_bytes = f"{key_id}:{secret}".encode("utf-8")
+    encoded_auth = base64.b64encode(auth_bytes).decode("utf-8")
+    headers = {"Authorization": f"Basic {encoded_auth}", "Accept": "application/json"}
+    
+    url = "https://live.trading212.com/api/v0/equity/positions"
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except Exception as e:
+        st.error(f"Network Error: {e}")
+        return None
+
 # --- PAGE 1: WAR ROOM ---
 def show_war_room():
     st.title("🦅 Trade AI: War Room")
@@ -122,7 +145,7 @@ def show_war_room():
 # --- PAGE 2: SCANNER ---
 def show_scanner():
     st.title("🔍 AI Ticker Scanner")
-    target = st.text_input("Enter Ticker (e.g. AAPL, MSFT, TSLA)").upper()
+    target = st.text_input("Enter Ticker (e.g. AAPL, MSFT)").upper()
     if target:
         if st.button(f"Analyze {target}"):
             data = fetch_processed_data(target, use_mock=is_mock)
@@ -131,54 +154,53 @@ def show_scanner():
                 features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                 prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
                 c1, c2 = st.columns(2)
-                c1.metric("AI Conviction", f"{prob:.1%}", help=TOOLTIPS["AI Conviction"])
+                c1.metric("AI Conviction", f"{prob:.1%}")
                 c2.metric("RSI", f"{latest['RSI']:.1f}")
                 st.plotly_chart(create_price_chart(data, target))
 
 # --- PAGE 3: PORTFOLIO ---
 def show_portfolio():
-    st.title("💰 My Live Portfolio")
-    
+    st.title("💰 Live Portfolio")
     positions = get_t212_positions()
     
     if positions:
         portfolio_list = []
         for pos in positions:
-            # 1. Correctly target the nested 'instrument' dictionary
             instrument = pos.get('instrument', {})
-            raw_ticker = instrument.get('ticker', 'UNKNOWN')
-            ticker = str(raw_ticker).split('_')[0] 
-            
-            # 2. Correctly target the nested 'walletImpact' dictionary
+            ticker = str(instrument.get('ticker', 'UNKNOWN')).split('_')[0] 
             wallet = pos.get('walletImpact', {})
-            pnl_value = wallet.get('unrealizedProfitLoss', 0.0)
-            pnl_currency = wallet.get('currency', '')
+            pnl_val = wallet.get('unrealizedProfitLoss', 0.0)
             
             portfolio_list.append({
                 "Ticker": ticker,
                 "Qty": pos.get('quantity', 0), 
                 "Price": pos.get('currentPrice', 0), 
-                "P&L": f"{pnl_value:.2f} {pnl_currency}".strip()
+                "P&L": pnl_val,
+                "Cur": wallet.get('currency', '')
             })
         
         df_p = pd.DataFrame(portfolio_list)
-        st.dataframe(df_p, use_container_width=True, hide_index=True)
+        
+        def color_pnl(val):
+            color = '#00ff00' if val >= 0 else '#ff4b4b'
+            return f'color: {color}'
 
-        if st.button("Run AI Health Check"):
-            for ticker in df_p['Ticker']:
-                if ticker == "UNKNOWN": continue
-                with st.expander(f"Audit: {ticker}"):
-                    data = fetch_processed_data(ticker)
+        st.dataframe(
+            df_p.style.applymap(color_pnl, subset=['P&L']).format({"P&L": "{:.2f}"}),
+            use_container_width=True, hide_index=True
+        )
+
+        if st.button("🛡️ Run AI Risk Audit"):
+            for t in df_p['Ticker']:
+                with st.expander(f"Audit: {t}"):
+                    data = fetch_processed_data(t, use_mock=is_mock)
                     if not data.empty:
                         latest = data.iloc[-1]
-                        features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
-                        prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
+                        feat = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
+                        prob = ml_model.predict_proba(feat)[0][1] if ml_model else 0.5
                         st.metric("AI Conviction", f"{prob:.1%}")
-                        if prob < 0.3: st.error("🚨 Exit Signal: Poor Technical Alignment.")
-                        elif prob > 0.7: st.success("💎 Hold: Strong Alignment.")
     else:
         st.info("No open positions found or connection failed.")
-
 
 # --- NAVIGATION ---
 if check_password():
