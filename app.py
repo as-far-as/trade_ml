@@ -39,14 +39,19 @@ with st.sidebar:
 @st.cache_data(ttl=3600)
 def fetch_processed_data(ticker, use_mock=False):
     fetcher = DataFetcher(ticker)
+    is_actual_mock = False # Track if we actually used mock data
+    
     if use_mock:
         hist_df = fetcher.generate_mock_data()
+        is_actual_mock = True
     else:
         hist_df = fetcher.fetch_historical_data()
         if hist_df.empty:
-            st.toast(f"⚠️ API limit hit for {ticker}. Using Mock Data.")
             hist_df = fetcher.generate_mock_data()
-    return fetcher.add_indicators(hist_df)
+            is_actual_mock = True
+            
+    # Return both the data AND a flag indicating if it's mock data
+    return fetcher.add_indicators(hist_df), is_actual_mock
 
 # --- UTILITIES ---
 def get_market_info(market_code):
