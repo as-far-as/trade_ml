@@ -5,8 +5,10 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "beautifulsoup4>=4.14.3",
     "curl-cffi>=0.13.0",
     "joblib>=1.5.3",
+    "lxml>=6.0.2",
     "openai>=2.21.0",
     "plotly>=6.5.2",
     "requests>=2.32.5",
