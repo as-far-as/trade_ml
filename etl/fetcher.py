@@ -1,56 +1,52 @@
 import pandas as pd
 import numpy as np
+import yfinance as yf
 import requests
 import streamlit as st
 from datetime import datetime 
 
+# Create a persistent session to impersonate a browser and bypass Yahoo blocks
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+})
+
 class DataFetcher:
     def __init__(self, ticker):
         self.ticker = ticker
-        self.api_key = st.secrets.get("FMP_API_KEY")
-        self.base_url = "https://financialmodelingprep.com/api/v3"
+        # Pass the custom session directly into yfinance
+        self.stock = yf.Ticker(ticker, session=session)
 
-    def fetch_historical_data(self):
-        """Fetches daily prices from FMP (250 req/day limit)."""
-        url = f"{self.base_url}/historical-price-full/{self.ticker}?apikey={self.api_key}"
+    def fetch_historical_data(self, period="1y", interval="1d"):
+        """Fetches daily prices from Yahoo Finance."""
         try:
-            response = requests.get(url)
-            data = response.json()
+            df = self.stock.history(period=period, interval=interval)
             
-            if "historical" not in data:
+            if df.empty:
                 return pd.DataFrame()
 
-            df = pd.DataFrame(data["historical"])
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
-            df = df.sort_index()
+            # Ensure columns are standardized
+            df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
             
-            # Standardize column names for your indicators
-            df = df[['open', 'high', 'low', 'close', 'volume']]
-            df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            # Strip timezone info so it plays nicely with Plotly and Streamlit caching
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+                
             return df
-        except:
+        except Exception as e:
+            print(f"yfinance fetch error for {self.ticker}: {e}")
             return pd.DataFrame()
 
     def fetch_fundamentals(self):
-        """Extracts key ratios using the OVERVIEW endpoint."""
-        params = {
-            "function": "OVERVIEW",
-            "symbol": self.ticker,
-            "apikey": self.api_key
-        }
-        
+        """Extracts key ratios using Yahoo Finance info."""
         try:
-            response = requests.get(self.base_url, params=params)
-            info = response.json()
-            
-            # Map Alpha Vantage keys to your existing expected keys
+            info = self.stock.info
             return {
-                "trailingPE": info.get("TrailingPE"),
-                "forwardPE": info.get("ForwardPE"),
-                "priceToBook": info.get("PriceToBookRatio"),
-                "debtToEquity": info.get("DebtToEquityRatio"),
-                "revenueGrowth": info.get("QuarterlyRevenueGrowthYOY")
+                "trailingPE": info.get("trailingPE"),
+                "forwardPE": info.get("forwardPE"),
+                "priceToBook": info.get("priceToBook"),
+                "debtToEquity": info.get("debtToEquity"),
+                "revenueGrowth": info.get("revenueGrowth")
             }
         except:
             return {}
@@ -80,10 +76,7 @@ class DataFetcher:
     def generate_mock_data(self):
         """Generates realistic synthetic stock data when API is offline."""
         date_rng = pd.date_range(end=datetime.now(), periods=100, freq='D')
-        
-        # Start at a random price between 50 and 200
         start_price = np.random.uniform(50, 200)
-        # Create a random walk
         changes = np.random.normal(0.001, 0.02, 100) 
         price_path = start_price * (1 + changes).cumprod()
         
@@ -96,8 +89,3 @@ class DataFetcher:
         }, index=date_rng)
         
         return df
-
-if __name__ == "__main__":
-    # For local testing, ensure you have an environment variable or hardcoded key
-    # fetcher = DataFetcher("AAPL")
-    pass

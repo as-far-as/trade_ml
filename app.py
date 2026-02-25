@@ -30,10 +30,11 @@ TOOLTIPS = {
 # --- SIDEBAR & GLOBAL SETTINGS ---
 with st.sidebar:
     st.header("⚙️ System Control")
-    is_mock = st.toggle("🛰️ Mock Data Mode", value=False, help="Use synthetic data if API is down.")
+    st.caption("Data Source: Yahoo Finance")
+    is_mock = st.toggle("🛰️ Mock Data Mode", value=False, help="Use synthetic data if Yahoo is blocking requests.")
     if st.button("Clear Cache & Refresh"):
         st.cache_data.clear()
-        st.session_state.market_data = {} # Clear session lock too
+        st.session_state.market_data = {} 
         st.rerun()
 
 # --- SMART FETCHING WRAPPER ---
@@ -59,7 +60,6 @@ def get_data_buffered(ticker, use_mock):
     if "market_data" not in st.session_state:
         st.session_state.market_data = {}
 
-    # Only fetch if we don't have it in current session
     if ticker not in st.session_state.market_data:
         st.session_state.market_data[ticker] = fetch_processed_data(ticker, use_mock)
     
@@ -106,16 +106,14 @@ def check_password():
 def get_t212_positions():
     key_id = st.secrets.get("t212_key_id", "").strip()
     secret = st.secrets.get("t212_secret", "").strip()
-    if not key_id or not secret:
-        return None
+    if not key_id or not secret: return None
 
     auth_bytes = f"{key_id}:{secret}".encode("utf-8")
     encoded_auth = base64.b64encode(auth_bytes).decode("utf-8")
     headers = {"Authorization": f"Basic {encoded_auth}", "Accept": "application/json"}
     
-    url = "https://live.trading212.com/api/v0/equity/positions"
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get("https://live.trading212.com/api/v0/equity/positions", headers=headers)
         return response.json() if response.status_code == 200 else None
     except: return None
 
@@ -136,7 +134,7 @@ def show_war_room():
             data, was_mocked = get_data_buffered(ticker, is_mock)
             
             if was_mocked and not is_mock:
-                st.toast(f"⚠️ API Limit hit for {ticker}. Mocked.", icon="🛑")
+                st.toast(f"⚠️ Yahoo blocked {ticker}. Mocked instead.", icon="🛑")
             
             if not data.empty:
                 latest = data.iloc[-1]
@@ -164,10 +162,9 @@ def show_scanner():
     target = st.text_input("Enter Ticker (e.g. AAPL)").upper()
     if target:
         if st.button(f"Analyze {target}"):
-            # Unpacking correctly here
             data, was_mocked = get_data_buffered(target, is_mock)
             if not data.empty:
-                if was_mocked: st.warning("Note: Using Mock Data.")
+                if was_mocked: st.warning("Note: Using Mock Data (Yahoo blocked request).")
                 latest = data.iloc[-1]
                 features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
                 prob = ml_model.predict_proba(features)[0][1] if ml_model else 0.5
@@ -198,7 +195,6 @@ def show_portfolio():
         if st.button("🛡️ Run AI Risk Audit"):
             for t in df_p['Ticker']:
                 with st.expander(f"Audit: {t}"):
-                    # Unpacking correctly here
                     data, was_mocked = get_data_buffered(t, is_mock)
                     if not data.empty:
                         latest = data.iloc[-1]
