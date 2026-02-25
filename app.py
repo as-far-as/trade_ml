@@ -1,128 +1,125 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import yfinance as yf
 import joblib
 import requests
-from datetime import datetime
-# Fixed Import: Ensures the etl folder is recognized
 from etl.fetcher import DataFetcher, get_index_tickers
 
+# --- INITIALIZATION ---
 st.set_page_config(page_title="Trade AI Pro", layout="wide")
+fetcher = DataFetcher()
 
-# --- MODEL LOADING ---
 @st.cache_resource
-def load_ml_model():
-    try: return joblib.load('models/random_forest_model.pkl')
-    except: return None
+def load_model():
+    try:
+        return joblib.load('models/random_forest_model.pkl')
+    except:
+        return None
 
-ml_model = load_ml_model()
-fetcher_tool = DataFetcher()
+model = load_model()
 
-# --- T212 API LOGIC (Restored) ---
-def fetch_t212_positions():
+# --- T212 API RESTORED ---
+def get_t212_data():
     api_key = st.secrets.get("T212_API_KEY")
     if not api_key:
-        st.error("Missing T212_API_KEY in Streamlit Secrets.")
+        st.warning("T212_API_KEY not found in secrets.")
         return []
     
-    # Trading 212 standard portfolio endpoint
     url = "https://live.trading212.com/api/v0/equity/portfolio"
     headers = {"Authorization": api_key}
     
     try:
         response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json()
-        st.error(f"T212 API Error: {response.status_code}")
-        return []
-    except Exception as e:
-        st.error(f"Connection Error: {e}")
+        return response.json() if response.status_code == 200 else []
+    except:
         return []
 
-def calculate_ai_score(df):
-    if df is None or df.empty or ml_model is None: return 0.5
+def get_ai_score(df):
+    if model is None or df.empty: return 0.5
     try:
-        df_ind = fetcher_tool.add_indicators(df)
-        if df_ind.empty: return 0.5
-        latest = df_ind.iloc[-1]
-        # Aligning with your model's expected features
+        processed = fetcher.add_indicators(df)
+        if processed.empty: return 0.5
+        latest = processed.iloc[-1]
         features = [[latest['RSI'], latest['MA50'], latest['MA200'], latest['Volatility'], latest['Volume']]]
-        return ml_model.predict_proba(features)[0][1]
-    except: return 0.5
+        return model.predict_proba(features)[0][1]
+    except:
+        return 0.5
 
 # --- PAGE: GLOBAL DISCOVERY ---
-def show_global_discovery():
+def show_discovery():
     st.title("🚀 Global AI Discovery")
     
     with st.sidebar:
-        st.header("Scan Settings")
-        target_index = st.selectbox("Market Index", ["SP500", "FTSE100", "IBEX35"])
-        # Defaults lowered to ensure you see results initially
-        min_liq = st.number_input("Min Daily Vol ($M)", value=0.1) * 1_000_000
-        min_vol = st.slider("Min Volatility (%)", 0.0, 5.0, 0.1) / 100
+        idx_choice = st.selectbox("Index", ["SP500", "FTSE100", "IBEX35"])
+        min_vol = st.number_input("Min Vol ($M)", value=0.1) * 1_000_000
+        min_vty = st.slider("Min Volatility %", 0.0, 5.0, 0.1) / 100
 
-    if st.button("🔥 Run Market Scan"):
-        tickers = get_index_tickers(target_index)
+    if st.button("Start AI Scan"):
+        tickers = get_index_tickers(idx_choice)
         if not tickers: return
 
-        with st.spinner(f"Analyzing {len(tickers)} assets..."):
-            # download with multi_level_index=False avoids the MultiIndex headache
-            data = yf.download(tickers, period="6mo", interval="1d", group_by='ticker', threads=True)
+        with st.spinner(f"Scanning {len(tickers)} stocks..."):
+            # Use group_by='column' to keep Tickers as columns for easier filtering
+            data = yf.download(tickers, period="6mo", interval="1d", group_by='column', threads=True)
             
-            discovery_results = []
-            for ticker in tickers:
+            results = []
+            for t in tickers:
                 try:
-                    # Robust check for ticker data
-                    if ticker not in data.columns.levels[0]: continue
-                    df = data[ticker].dropna()
-                    if len(df) < 50: continue
+                    # Extract OHLCV for specific ticker
+                    ticker_df = pd.DataFrame({
+                        'Close': data['Close'][t],
+                        'Volume': data['Volume'][t]
+                    }).dropna()
+                    
+                    if len(ticker_df) < 50: continue
+                    
+                    # Calculation
+                    avg_liq = (ticker_df['Close'] * ticker_df['Volume']).tail(5).mean()
+                    vty = ticker_df['Close'].pct_change().tail(21).std()
 
-                    # Quant Filters
-                    current_liq = (df['Close'] * df['Volume']).tail(5).mean()
-                    volatility = df['Close'].pct_change().tail(21).std()
-
-                    if current_liq >= min_liq and volatility >= min_vol:
-                        score = calculate_ai_score(df)
-                        discovery_results.append({
-                            "Ticker": ticker,
+                    if avg_liq >= min_vol and vty >= min_vty:
+                        score = get_ai_score(ticker_df)
+                        results.append({
+                            "Ticker": t,
                             "AI Score": score,
-                            "Price": round(df['Close'].iloc[-1], 2),
-                            "Vol%": f"{volatility:.2%}",
-                            "Liq($M)": round(current_liq / 1_000_000, 2)
+                            "Price": round(ticker_df['Close'].iloc[-1], 2),
+                            "Volat%": f"{vty:.2%}",
+                            "Liq($M)": round(avg_liq / 1_000_000, 2)
                         })
                 except: continue
 
-            if discovery_results:
-                res_df = pd.DataFrame(discovery_results).sort_values("AI Score", ascending=False)
-                st.dataframe(res_df.style.background_gradient(subset=['AI Score'], cmap='RdYlGn'), use_container_width=True)
+            if results:
+                df_res = pd.DataFrame(results).sort_values("AI Score", ascending=False)
+                st.dataframe(df_res.style.background_gradient(subset=['AI Score'], cmap='RdYlGn'))
             else:
-                st.warning("No stocks passed. Try lowering the 'Min Daily Vol' filter.")
+                st.warning("No matches. Try lowering filters.")
 
 # --- PAGE: TRADING 212 ---
-def show_portfolio():
-    st.title("💰 Trading 212 Live Feed")
-    if st.button("🔄 Sync Portfolio"):
-        positions = fetch_t212_positions()
+def show_t212():
+    st.title("💰 Trading 212 Portfolio")
+    if st.button("Sync Live Portfolio"):
+        positions = get_t212_data()
+        if not positions:
+            st.error("Could not fetch API data.")
+            return
+
+        final_rows = []
+        for pos in positions:
+            t = pos['ticker'].split('_')[0]
+            hist = yf.download(t, period="6mo", progress=False)
+            score = get_ai_score(hist)
+            final_rows.append({
+                "Ticker": t,
+                "Quantity": pos['quantity'],
+                "AI Score": score,
+                "P&L": pos.get('ppl', 0)
+            })
         
-        if positions:
-            results = []
-            for pos in positions:
-                ticker = pos['ticker'].split('_')[0] # Clean T212 suffix
-                hist = yf.download(ticker, period="6mo", progress=False)
-                score = calculate_ai_score(hist)
-                results.append({
-                    "Ticker": ticker,
-                    "AI Score": score,
-                    "Quantity": pos['quantity'],
-                    "P&L": pos.get('ppl', 0)
-                })
-            
-            st.table(pd.DataFrame(results).sort_values("AI Score", ascending=False).style.background_gradient(subset=['AI Score'], cmap='RdYlGn'))
+        st.table(pd.DataFrame(final_rows).sort_values("AI Score", ascending=False).style.background_gradient(subset=['AI Score'], cmap='RdYlGn'))
 
 # --- NAV ---
-pg = st.navigation({
-    "Scanner": [st.Page(show_global_discovery, title="Global Discovery", icon="🚀")],
-    "Account": [st.Page(show_portfolio, title="Trading 212", icon="💰")]
-})
+pg = st.navigation([
+    st.Page(show_discovery, title="Global Discovery", icon="🚀"),
+    st.Page(show_t212, title="Trading 212", icon="💰")
+])
 pg.run()
