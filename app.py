@@ -20,9 +20,9 @@ model = load_model()
 
 # --- T212 API RESTORED ---
 def get_t212_data():
-    api_key = st.secrets.get("t212_secret")
+    api_key = st.secrets.get("t212_key_id")
     if not api_key:
-        st.warning("t212_secret not found in secrets.")
+        st.warning("t212_key_id not found in secrets.")
         return []
     
     url = "https://live.trading212.com/api/v0/equity/portfolio"
