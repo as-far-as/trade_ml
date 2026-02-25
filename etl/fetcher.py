@@ -8,43 +8,44 @@ from datetime import datetime
 # --- STANDALONE CACHED FUNCTIONS ---
 
 @st.cache_data(ttl=86400)
+
 def get_index_tickers(index_name="SP500"):
-    """
-    Fetches live index constituents with browser-impersonation headers
-    to prevent connection blocks.
-    """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
         if index_name == "SP500":
             url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-            # We use requests to get the HTML with headers, then pass to pandas
-            response = requests.get(url, headers=headers)
-            table = pd.read_html(response.text, flavor='lxml')[0]
-            return table['Symbol'].tolist()
-        
+            table_idx = 0
         elif index_name == "FTSE100":
             url = "https://en.wikipedia.org/wiki/FTSE_100_Index"
-            response = requests.get(url, headers=headers)
-            table = pd.read_html(response.text, flavor='lxml')[4]
-            tickers = table['EPIC'].tolist()
-            return [f"{t}.L" for t in tickers]
-        
+            table_idx = 4
         elif index_name == "IBEX35":
             url = "https://en.wikipedia.org/wiki/IBEX_35"
-            response = requests.get(url, headers=headers)
-            table = pd.read_html(response.text, flavor='lxml')[1]
-            tickers = table['Ticker'].tolist()
-            return [f"{t}.MC" for t in tickers]
-            
-        return []
+            table_idx = 1
+        
+        response = requests.get(url, headers=headers)
+        df = pd.read_html(response.text, flavor='lxml')[table_idx]
+        
+        # FUZZY COLUMN SEARCH: Find a column that looks like Ticker/Symbol/EPIC
+        target_cols = ['Symbol', 'Ticker', 'EPIC', 'Ticker symbol', 'Code']
+        found_col = None
+        for c in target_cols:
+            if c in df.columns:
+                found_col = c
+                break
+        
+        if not found_col:
+            return []
+
+        tickers = df[found_col].tolist()
+        
+        # Clean and suffix
+        if index_name == "FTSE100": return [f"{str(t).strip()}.L" for t in tickers]
+        if index_name == "IBEX35": return [f"{str(t).strip()}.MC" for t in tickers]
+        return [str(t).strip().replace('.', '-') for t in tickers]
+
     except Exception as e:
-        # If scraping fails, we provide a small fallback list so the app doesn't crash
         st.error(f"Scraping Error: {e}")
-        fallbacks = {"SP500": ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"], "FTSE100": ["AZN.L", "HSBA.L"], "IBEX35": ["SAN.MC", "ITX.MC"]}
-        return fallbacks.get(index_name, [])
+        return []
 
 # --- DATA PROCESSOR CLASS ---
 class DataFetcher:
