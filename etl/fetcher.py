@@ -7,9 +7,11 @@ class DataFetcher:
     def __init__(self):
         pass
 
-    @st.cache_data(ttl=86400) # Cache ticker lists for 24 hours
-    def get_index_tickers(self, index_name="SP500"):
+    @st.cache_data(ttl=86400)
+    @staticmethod  # <--- Add this decorator!
+    def get_index_tickers(index_name="SP500"):
         try:
+            # Note: We removed 'self' from the arguments below
             if index_name == "SP500":
                 url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
                 table = pd.read_html(url)[0]
