@@ -7,11 +7,12 @@ requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.14.3",
     "curl-cffi>=0.13.0",
+    "feedparser>=6.0.12",
+    "google-genai>=1.67.0",
     "joblib>=1.5.3",
     "lxml>=6.0.2",
     "matplotlib>=3.10.8",
     "numpy>=2.4.2",
-    "openai>=2.21.0",
     "pandas>=2.3.3",
     "plotly>=6.5.2",
     "pytz>=2025.2",
