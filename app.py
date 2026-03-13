@@ -130,20 +130,39 @@ def map_t212_to_yahoo(t212_ticker):
     return symbol + mapping.get(exchange, "")
 
 def get_t212_portfolio():
-    """Fetches live portfolio from Trading 212 API (Live or Demo)."""
-    key = st.secrets.get("t212_key_id")
-    if not key: return []
-    try:
-        # Try Live Endpoint
-        res = requests.get("https://live.trading212.com/api/v0/equity/portfolio", 
-                          headers={"Authorization": key}, timeout=5)
-        if res.status_code != 200:
-            # Try Demo Endpoint if Live fails
-            res = requests.get("https://demo.trading212.com/api/v0/equity/portfolio", 
-                              headers={"Authorization": key}, timeout=5)
+    """Fetches live portfolio from Trading 212 API using Basic Auth."""
+    api_key = st.secrets.get("t212_api_key")
+    api_secret = st.secrets.get("t212_api_secret")
+    
+    if not api_key or not api_secret: 
+        st.error("🚨 Missing API Key or Secret in secrets.toml")
+        return []
         
-        return res.json() if res.status_code == 200 else []
-    except: return []
+    try:
+        # T212 requires HTTP Basic Auth (Key + Secret)
+        res_live = requests.get(
+            "https://live.trading212.com/api/v0/equity/portfolio", 
+            auth=(api_key, api_secret),
+            timeout=5
+        )
+        if res_live.status_code == 200:
+            return res_live.json()
+            
+        # Try Demo Endpoint if Live fails
+        res_demo = requests.get(
+            "https://demo.trading212.com/api/v0/equity/portfolio", 
+            auth=(api_key, api_secret),
+            timeout=5
+        )
+        if res_demo.status_code == 200:
+            return res_demo.json()
+            
+        st.error(f"🚨 API Error: Live [{res_live.status_code}] | Demo [{res_demo.status_code}]")
+        return []
+        
+    except Exception as e: 
+        st.error(f"🚨 Network Error: {e}")
+        return []
 
 @st.cache_data(ttl=3600)
 def get_cached_prediction(ticker):
