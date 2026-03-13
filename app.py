@@ -130,9 +130,12 @@ def map_t212_to_yahoo(t212_ticker):
     return symbol + mapping.get(exchange, "")
 
 def get_t212_portfolio():
-    """Fetches live portfolio from Trading 212 API using Basic Auth."""
-    api_key = st.secrets.get("t212_api_key")
-    api_secret = st.secrets.get("t212_api_secret")
+    api_key = st.secrets.get("t212_key_id")    
+    api_secret = st.secrets.get("t212_secret") 
+    
+    if not api_key or not api_secret: 
+        st.error("🚨 Missing API Key or Secret in secrets.toml")
+        return []
     
     if not api_key or not api_secret: 
         st.error("🚨 Missing API Key or Secret in secrets.toml")
