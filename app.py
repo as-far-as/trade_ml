@@ -105,13 +105,58 @@ def get_recommendation(score):
     if score < 0.48: return "Sell", "sell-signal"
     return "Hold", "hold-signal"
 
+def map_t212_to_yahoo(t212_ticker):
+    """Maps Trading 212 ticker format to Yahoo Finance tickers."""
+    parts = t212_ticker.split('_')
+    symbol = parts[0]
+    if len(parts) < 2: return symbol
+    
+    exchange = parts[1]
+    mapping = {
+        "L": ".L",    # London
+        "ES": ".MC",  # Madrid
+        "DE": ".DE",  # XETRA
+        "FR": ".PA",  # Paris
+        "AS": ".AS",  # Amsterdam
+        "MI": ".MI",  # Milan
+        "BR": ".BR",  # Brussels
+        "HE": ".HE",  # Helsinki
+        "ST": ".ST",  # Stockholm
+        "OS": ".OL",  # Oslo
+        "CO": ".CO",  # Copenhagen
+        "SW": ".SW",  # Switzerland
+        "US": ""      # US (No suffix)
+    }
+    return symbol + mapping.get(exchange, "")
+
 def get_t212_portfolio():
+    """Fetches live portfolio from Trading 212 API (Live or Demo)."""
     key = st.secrets.get("t212_key_id")
     if not key: return []
     try:
-        res = requests.get("https://live.trading212.com/api/v0/equity/portfolio", headers={"Authorization": key})
+        # Try Live Endpoint
+        res = requests.get("https://live.trading212.com/api/v0/equity/portfolio", 
+                          headers={"Authorization": key}, timeout=5)
+        if res.status_code != 200:
+            # Try Demo Endpoint if Live fails
+            res = requests.get("https://demo.trading212.com/api/v0/equity/portfolio", 
+                              headers={"Authorization": key}, timeout=5)
+        
         return res.json() if res.status_code == 200 else []
     except: return []
+
+@st.cache_data(ttl=3600)
+def get_cached_prediction(ticker):
+    """Fetches data and runs prediction with caching."""
+    try:
+        h = yf.download(ticker, period="2y", progress=False)
+        if h.empty or len(h) < 200: 
+            return 0.5, "Need Data"
+        score = get_prediction_score(h, sentiment=0.0)
+        rec, _ = get_recommendation(score)
+        return score, rec
+    except:
+        return 0.5, "Error"
 
 # --- NAVIGATION ---
 st.sidebar.title("🚀 Trade AI Pro")
@@ -217,41 +262,44 @@ elif page == "Specific Stock Analysis":
 # --- PAGE: PORTFOLIO ---
 elif page == "My Portfolio (T212)":
     st.title("💼 Live Trading 212 Portfolio")
-    st.write("Connected to your live portfolio. Run AI analysis on your current holdings.")
+    st.write("Connected to your live portfolio. AI scores are automatically calculated for your holdings.")
     
     pos = get_t212_portfolio()
     if pos:
         rows = []
         for p in pos:
-            t = p['ticker'].split('_')[0]
-            # Mapping T212 format to Yahoo
-            if "_" in p['ticker']:
-                s = p['ticker'].split('_')[1]
-                if s == "L": t += ".L"
-                elif s == "EQ" and "." not in t: pass # US
-            rows.append({"Ticker": t, "Qty": p['quantity'], "Avg Price": p['averagePrice'], "Current Price": p['currentPrice'], "P&L": p['ppl']})
+            t = map_t212_to_yahoo(p['ticker'])
+            rows.append({
+                "Ticker": t, 
+                "Qty": p['quantity'], 
+                "Avg Price": p['averagePrice'], 
+                "Current Price": p['currentPrice'], 
+                "P&L": p['ppl']
+            })
         
         df = pd.DataFrame(rows)
-        st.dataframe(df.style.background_gradient(subset=['P&L'], cmap='RdYlGn'), use_container_width=True)
         
-        if st.button("🔍 Run AI Deep Scan on Portfolio"):
-            with st.spinner("Processing holdings..."):
+        if st.checkbox("🔍 Enable AI Predictions", value=True):
+            with st.spinner("Analyzing portfolio holdings..."):
                 scores = []
                 recs = []
                 for ticker in df['Ticker']:
-                    try:
-                        h = yf.download(ticker, period="2y", progress=False)
-                        # Default sentiment to 0 for portfolio scan to save time
-                        s = get_prediction_score(h, sentiment=0.0)
-                        r, _ = get_recommendation(s)
-                        scores.append(s)
-                        recs.append(r)
-                    except:
-                        scores.append(0.5)
-                        recs.append("Error")
+                    s, r = get_cached_prediction(ticker)
+                    scores.append(s)
+                    recs.append(r)
                 df['AI Score'] = scores
                 df['AI Rec'] = recs
-                st.subheader("Portfolio AI Analysis")
-                st.dataframe(df.sort_values("AI Score", ascending=False).style.background_gradient(subset=['AI Score'], cmap='RdYlGn'), use_container_width=True)
+            
+            # Show with predictions
+            st.dataframe(
+                df.style.background_gradient(subset=['P&L', 'AI Score'], cmap='RdYlGn'), 
+                use_container_width=True
+            )
+        else:
+            # Show without predictions
+            st.dataframe(
+                df.style.background_gradient(subset=['P&L'], cmap='RdYlGn'), 
+                use_container_width=True
+            )
     else:
-        st.info("No positions found or API key missing in st.secrets.")
+        st.info("No positions found. Verify your 't212_key_id' in .streamlit/secrets.toml and ensure you have active holdings.")
